@@ -12,6 +12,7 @@
 import type { PenStyle, Tool } from "./model";
 import { SMOOTHING_LEVELS, SmoothingLevel } from "./smoothing";
 import { SNAP_HOLD_MS } from "./shapes";
+import { DOC_FONTS, DocFont, EXPORT_STYLES, ExportStyle } from "./docStyle";
 
 export type ActiveTool = Tool | "eraser" | "lasso";
 /** Pen presets. "dashed" was "dotted" before Stage A2 (migrated on load). */
@@ -59,6 +60,10 @@ export interface SyncedSettings {
 	inkFolder: string;
 	/** Vault folder where "Save to vault" puts lasso screenshots. */
 	screenshotFolder: string;
+	/** PDF export style used by Obsidian's own export and "Export PDF with / without ink". */
+	defaultExportStyle: ExportStyle;
+	/** Font of the document-style PDF export. */
+	docExportFont: DocFont;
 	/**
 	 * Settings schema version. 2 (Stage E): double-tap became opt-in and the hold delay default
 	 * 0.5 s — older data.json files are migrated once (see `sanitizeSynced`).
@@ -210,6 +215,8 @@ export const DEFAULT_SYNCED: Readonly<SyncedSettings> = {
 	smoothing: "medium",
 	inkFolder: DEFAULT_INK_FOLDER,
 	screenshotFolder: DEFAULT_SCREENSHOT_FOLDER,
+	defaultExportStyle: "themed",
+	docExportFont: "serif",
 	settingsVersion: SETTINGS_VERSION,
 };
 
@@ -322,6 +329,8 @@ export function sanitizeSynced(raw: unknown): SyncedSettings {
 			: DEFAULT_SYNCED.smoothing,
 		inkFolder: sanitizeFolder(r.inkFolder, DEFAULT_INK_FOLDER),
 		screenshotFolder: sanitizeFolder(r.screenshotFolder, DEFAULT_SCREENSHOT_FOLDER),
+		defaultExportStyle: oneOf(EXPORT_STYLES, r.defaultExportStyle, DEFAULT_SYNCED.defaultExportStyle),
+		docExportFont: oneOf(DOC_FONTS, r.docExportFont, DEFAULT_SYNCED.docExportFont),
 		settingsVersion: SETTINGS_VERSION,
 	};
 }

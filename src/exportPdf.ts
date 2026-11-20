@@ -1,18 +1,19 @@
 /**
- * Stage H — "Export PDF with / without ink" as one-shot exports (state logic: exportOnce.ts).
+ * Stage H — "Export PDF with / without ink" (and "… (document style)", docStyle.ts) as one-shot
+ * exports (state logic: exportOnce.ts).
  *
  * Obsidian's `workspace:export-pdf` opens its export dialog (a Modal). On desktop "Export" first
  * awaits a native save dialog (cancelling it leaves the dialog open), then closes the dialog and
  * renders the note in a hidden window, running our print post-processor once (readingView.ts asks
- * `takeInclude()`). On mobile the dialog closes and the note renders in a `.print` div.
+ * `takeOptions()`). On mobile the dialog closes and the note renders in a `.print` div.
  *
  * We arm the override, run the command and watch the dialog's `.modal-container` (MutationObserver
  * on <body>): when it goes away the override survives a short grace period for the render to start;
  * a new dialog after that, the render consuming it, or the timeouts drop it. The persisted
- * "Include ink in PDF export" toggle is never changed.
+ * "Include ink in PDF export" toggle and the "Default export style" setting are never changed.
  */
 import { App, MarkdownView } from "obsidian";
-import { ExportOverride, arm, dialogClosed, otherDialog, pending, take } from "./exportOnce";
+import { ExportChoice, ExportOptions, ExportOverride, arm, dialogClosed, otherDialog, pending, take } from "./exportOnce";
 
 const EXPORT_COMMAND = "workspace:export-pdf";
 /** No dialog appeared this long after the command ran: treat it as closed (grace only). */
@@ -31,7 +32,8 @@ export class PdfExporter {
 
 	constructor(
 		private readonly app: App,
-		private readonly toggle: () => boolean,
+		/** The defaults: "Include ink in PDF export" toggle, "Default export style". */
+		private readonly defaults: () => ExportOptions,
 	) {}
 
 	private commands(): Commands | null {
@@ -44,15 +46,15 @@ export class PdfExporter {
 		return !!v?.file && !!this.commands()?.findCommand?.(EXPORT_COMMAND);
 	}
 
-	/** One-shot export of `view` (default: active) with / without ink. */
-	run(include: boolean, view?: MarkdownView | null): boolean {
+	/** One-shot export of `view` (default: active) with / without ink and/or in a given style. */
+	run(choice: ExportChoice, view?: MarkdownView | null): boolean {
 		const v = view ?? this.app.workspace.getActiveViewOfType(MarkdownView);
 		const commands = this.commands();
 		if (!v || !commands || !this.canExport(v)) return false;
 		// The export works on the active leaf (a toolbar of another pane exports its own note).
 		if (this.app.workspace.getActiveViewOfType(MarkdownView) !== v) this.app.workspace.setActiveLeaf(v.leaf, { focus: false });
 		this.reset();
-		this.override = arm(include, Date.now());
+		this.override = arm(choice, Date.now());
 		const doc = activeDocument;
 		const before = new Set(Array.from(doc.body.children).filter(isDialog));
 		this.observer = new MutationObserver(() => this.onMutation(doc));
@@ -67,17 +69,18 @@ export class PdfExporter {
 		return true;
 	}
 
-	/** The print post-processor: include ink in THIS export? Consumes the one-shot override. */
-	takeInclude(): boolean {
-		const { include, next } = take(this.override, this.toggle(), Date.now());
+	/** The print post-processor: ink and style of THIS export. Consumes the one-shot override. */
+	takeOptions(): ExportOptions {
+		const { include, style, next } = take(this.override, this.defaults(), Date.now());
 		this.override = next;
 		this.reset();
-		return include;
+		return { include, style };
 	}
 
-	/** Is a one-shot export armed (tests / smoke checks)? */
-	get armed(): boolean | null {
-		return pending(this.override, Date.now()) ? this.override.include : null;
+	/** The armed one-shot export, if any (tests / smoke checks). */
+	get armed(): ExportChoice | null {
+		const o = this.override;
+		return pending(o, Date.now()) ? { include: o.include, style: o.style } : null;
 	}
 
 	destroy(): void {

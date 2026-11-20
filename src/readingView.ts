@@ -33,6 +33,8 @@ import { Band, Pager, inSlice, padExtents, planSlices } from "./printSlices"; //
 import type { InkStore } from "./store";
 import { Row, mergeRows, rowsPath } from "./textHighlight";
 import { charNeedle, charOrigin } from "./charAnchor";
+import type { ExportOptions } from "./exportOnce";
+import { DOC_FONT_VAR, DOC_STYLE_CLASS, ExportStyle, docFontStack, inkYScale, scaleInkY } from "./docStyle";
 import {
 	LineMark,
 	LineRange,
@@ -69,8 +71,11 @@ export interface ReadingHost {
 	store: InkStore;
 	getSettings(): PencilSettings;
 	updateSettings(patch: Partial<PencilSettings>): void;
-	/** [Stage H] A print run starts: include ink? (one-shot export override, else the toggle; consumes it). */
-	printIncludesInk(): boolean;
+	/**
+	 * [Stage H] A print run starts: include ink, and in which style? (one-shot export override, else
+	 * the "Include ink in PDF export" toggle / "Default export style"; consumes the override.)
+	 */
+	printOptions(): ExportOptions;
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -106,6 +111,11 @@ interface Layout {
 	print: boolean;
 	/** [Stage K] Print: spaces up to this height (layout px) never break across pages. */
 	pageHeight?: number;
+	/**
+	 * Document-style print: line height of the text / the editor's. Ink offsets from the text it
+	 * hangs off (character or line) scale by it; the strokes themselves don't (docStyle.ts).
+	 */
+	yScale?: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -131,6 +141,18 @@ function strokeBottom(s: Stroke): number {
 		bottomCache.set(s, b);
 	}
 	return b;
+}
+
+const centerCache = new WeakMap<Stroke, number>();
+/** Vertical center of a stroke's points (relative to its anchor line top). */
+function strokeCenterY(s: Stroke): number {
+	let c = centerCache.get(s);
+	if (c === undefined) {
+		const b = bbox(s.points);
+		c = b ? (b.minY + b.maxY) / 2 : 0;
+		centerCache.set(s, c);
+	}
+	return c;
 }
 
 let linesMemo: { text: string; lines: string[] } | null = null;
@@ -474,10 +496,10 @@ function measureTextRows(el: HTMLElement, st: SectionText, lay: Layout, pieces: 
 }
 
 /**
- * [Stage H] Top-left (relative to (left, top)) of character `ch` of source line `line` in the
+ * [Stage H] Top-left and height (relative to (left, top)) of character `ch` of source line `line` in the
  * section's rendered text (the Stage C matching, on the word around it), or null if not found.
  */
-function measureChar(el: HTMLElement, st: SectionText, lay: Layout, line: number, ch: number, left: number, top: number, lh: number): [number, number] | null {
+function measureChar(el: HTMLElement, st: SectionText, lay: Layout, line: number, ch: number, left: number, top: number, lh: number): [number, number, number] | null {
 	const n = charNeedle(lay.lines, lay.lineStart, line, ch);
 	if (!n) return null;
 	const at = findNth(st.hay.text, n.needle, n.k);
@@ -492,7 +514,7 @@ function measureChar(el: HTMLElement, st: SectionText, lay: Layout, line: number
 		return null;
 	}
 	const r = Array.from(range.getClientRects()).find((q) => q.height > 0 && q.height <= 2.5 * lh);
-	return r ? [r.left - left, r.top - top] : null;
+	return r ? [r.left - left, r.top - top, r.height] : null;
 }
 
 function svgEl<K extends keyof SVGElementTagNameMap>(doc: Document, tag: K): SVGElementTagNameMap[K] {
@@ -715,11 +737,20 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	for (const { s, line, charLine } of own) {
 		let x = 0;
 		let y = yOf(line);
+		let anchorTop = y;
+		let box = 0;
 		if (s.char && charLine !== undefined) {
 			// [Stage H] at its character's rendered rect + offset; else the section mapping.
 			const c = measureChar(el, textOf(), lay, charLine, s.char.ch, left, top, lh);
-			if (c) [x, y] = charOrigin(c, s.char);
+			if (c) {
+				[x, y] = charOrigin(c, s.char);
+				anchorTop = c[1];
+				box = c[2];
+			}
 		}
+		// Document style: text rows are shorter/taller than the editor's; keep the ink's distance
+		// from its text proportional (the stroke itself is not scaled).
+		if (lay.yScale !== undefined && lay.yScale !== 1) y = scaleInkY(y, anchorTop, strokeCenterY(s), lay.yScale, box);
 		addPath(s, pathOf(s), y, x);
 		inkBottom = Math.max(inkBottom, y + strokeBottom(s));
 	}
@@ -934,7 +965,11 @@ export class ReadingInk {
 	// ----- PDF export -----------------------------------------------------------------------
 
 	private processPrint(el: HTMLElement, path: string, ctx: MarkdownPostProcessorContext): Promise<void> | void {
-		const withInk = this.host.printIncludesInk(); // [Stage H] one-shot export override, else the toggle
+		// [Stage H] one-shot export override, else the toggle / default style
+		const { include: withInk, style } = this.host.printOptions();
+		// Document style first (synchronously, even without ink): everything measured below — block
+		// heights, line marks, character rects — is measured against the document-style text.
+		this.applyStyle(el, style);
 		if (!withInk) {
 			// [Stage K] drawing spaces print without ink too (the layout doesn't change).
 			const known = this.host.store.get(path);
@@ -960,7 +995,7 @@ export class ReadingInk {
 			const prevWidth = page?.style.width ?? "";
 			if (page) page.style.width = `${printAreaWidth(cfg)}px`;
 			try {
-				this.layoutPrint(el, file, text, ink, cfg, page);
+				this.layoutPrint(el, file, text, ink, cfg, page, style);
 			} catch (err) {
 				console.error("[pencil-layer] PDF ink failed", err);
 			} finally {
@@ -968,6 +1003,39 @@ export class ReadingInk {
 			}
 		})();
 		return self;
+	}
+
+	/**
+	 * Document-style export: a class on the export's `.print` root (styles.css does the rest) and the
+	 * chosen font as a variable. Not removed afterwards: the root is printed after the post-processors
+	 * resolve and discarded after printing (desktop: its window closes; mobile: the div is removed).
+	 */
+	private applyStyle(el: HTMLElement, style: ExportStyle): void {
+		const root = el.parentElement?.classList.contains("print") ? el.parentElement : el;
+		if (style !== "document") {
+			root.classList.remove(DOC_STYLE_CLASS);
+			return;
+		}
+		root.classList.add(DOC_STYLE_CLASS);
+		root.style.setProperty(DOC_FONT_VAR, docFontStack(this.host.getSettings().docExportFont));
+	}
+
+	/**
+	 * Line height (px) of the editor the ink was drawn in: the note's open editor (CodeMirror's
+	 * `defaultLineHeight`), else any open Markdown editor's, else null (unknown).
+	 */
+	private editorLineHeight(path: string): number | null {
+		let any: number | null = null;
+		for (const leaf of this.host.app.workspace.getLeavesOfType("markdown")) {
+			const v = leaf.view;
+			if (!(v instanceof MarkdownView)) continue;
+			const cm = (v.editor as unknown as { cm?: { defaultLineHeight?: number } }).cm;
+			const lh = cm?.defaultLineHeight;
+			if (typeof lh !== "number" || !(lh > 0)) continue;
+			if (v.file?.path === path) return lh;
+			any ??= lh;
+		}
+		return any;
 	}
 
 	/** Obsidian's saved PDF export options (written by the export dialog before it renders). */
@@ -1007,26 +1075,28 @@ export class ReadingInk {
 		return { blocks, hosts };
 	}
 
-	private drawHosts(container: HTMLElement, lines: readonly string[], hosts: Host[], ink: InkFile, pageHeight: number): void {
+	private drawHosts(container: HTMLElement, lines: readonly string[], hosts: Host[], ink: InkFile, pageHeight: number, yScale: number): void {
 		if (isEmptyInk(ink)) return;
 		if (hosts.length === 0) {
 			// No metadata: the whole note as one block (proportional placement).
-			drawSection(container, { lines, lineStart: 0, lineEnd: lines.length - 1, range: { from: 0, to: lines.length - 1 }, print: true, pageHeight }, ink);
+			drawSection(container, { lines, lineStart: 0, lineEnd: lines.length - 1, range: { from: 0, to: lines.length - 1 }, print: true, pageHeight, yScale }, ink);
 			return;
 		}
 		hosts.forEach((h, i) => {
 			const nextStart = i + 1 < hosts.length ? hosts[i + 1].lineStart : lines.length;
 			const range = ownedRange(lines, h.lineStart, h.lineEnd, { nextStart, isFirst: i === 0 });
-			drawSection(h.el, { lines, lineStart: h.lineStart, lineEnd: h.lineEnd, range, print: true, pageHeight }, ink);
+			drawSection(h.el, { lines, lineStart: h.lineStart, lineEnd: h.lineEnd, range, print: true, pageHeight, yScale }, ink);
 		});
 	}
 
-	private layoutPrint(container: HTMLElement, file: TFile, text: string, ink: InkFile, cfg: unknown, page: HTMLElement | null): void {
+	private layoutPrint(container: HTMLElement, file: TFile, text: string, ink: InkFile, cfg: unknown, page: HTMLElement | null, style: ExportStyle): void {
 		const lines = splitLines(text);
 		const { hosts } = this.printBlocks(container, file);
 		// [Stage K] a space up to one printable page tall (layout px) never breaks across pages.
 		const pageHeight = printAreaHeight(cfg) - 2;
-		this.drawHosts(container, lines, hosts, ink, pageHeight);
+		// Document style: its body text has its own line height; ink was drawn against the editor's.
+		const yScale = style === "document" ? inkYScale(lineHeightOf(container), this.editorLineHeight(file.path)) : 1;
+		this.drawHosts(container, lines, hosts, ink, pageHeight, yScale);
 		// [Stage L] taller spaces: page slices. The first page starts at the top of the print root.
 		paginateSpaces(container, (page ?? container).getBoundingClientRect().top, pageHeight);
 	}

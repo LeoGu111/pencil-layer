@@ -62,6 +62,8 @@ import {
 } from "./settings";
 import { SMOOTHING_LEVELS } from "./smoothing";
 import { blockStylusTouch, onTap } from "./tap";
+import type { ExportChoice } from "./exportOnce";
+import { otherStyle, styleExportLabel } from "./docStyle";
 
 export interface ToolbarHost {
 	getSettings(): PencilSettings;
@@ -80,7 +82,7 @@ export interface ToolbarHost {
 	setDeskSelect(on: boolean): void;
 	// [Stage H] one-shot PDF export from the ⋯ menu
 	canExportPdf(view: MarkdownView): boolean;
-	exportPdf(view: MarkdownView, include: boolean): void;
+	exportPdf(view: MarkdownView, choice: ExportChoice): void;
 }
 
 const PRESETS: { key: PenPreset; label: string }[] = [
@@ -762,8 +764,13 @@ export class InkToolbar {
 				this.menuItem(el, "file-down", "Include ink in PDF export", s.includeInkInPdf, () => set({ includeInkInPdf: !s.includeInkInPdf }));
 				// [Stage H] one-shot exports: the toggle above stays the default for Obsidian's own export.
 				if (this.host.canExportPdf(this.view)) {
-					this.menuItem(el, "file-pen-line", "Export PDF with ink", false, () => this.host.exportPdf(this.view, true));
-					this.menuItem(el, "file-text", "Export PDF without ink", false, () => this.host.exportPdf(this.view, false));
+					this.menuItem(el, "file-pen-line", "Export PDF with ink", false, () => this.host.exportPdf(this.view, { include: true }));
+					this.menuItem(el, "file-text", "Export PDF without ink", false, () => this.host.exportPdf(this.view, { include: false }));
+					// The style that isn't the default, for this one export (ink per the toggle above).
+					const other = otherStyle(s.defaultExportStyle);
+					this.menuItem(el, other === "document" ? "file-type" : "palette", styleExportLabel(other), false, () =>
+						this.host.exportPdf(this.view, { style: other }),
+					);
 				}
 				if (this.host.showMouseToggle) {
 					this.menuItem(el, "mouse-pointer-2", "Mouse draws", s.mouseDraws, () => set({ mouseDraws: !s.mouseDraws }));

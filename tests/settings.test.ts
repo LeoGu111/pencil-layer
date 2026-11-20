@@ -147,6 +147,12 @@ describe("sanitizeLocal", () => {
 	it("Stage K: page view is gone (a stored value is ignored)", () => {
 		expect("pageView" in sanitizeLocal({ pageView: true }, true)).toBe(false);
 	});
+	it("document-style export: font and default style are synced, sanitized, default themed/serif", () => {
+		expect(sanitizeSynced(null)).toMatchObject({ defaultExportStyle: "themed", docExportFont: "serif" });
+		expect(sanitizeSynced({ defaultExportStyle: "document", docExportFont: "sans" })).toMatchObject({ defaultExportStyle: "document", docExportFont: "sans" });
+		expect(sanitizeSynced({ defaultExportStyle: "word", docExportFont: "comic" })).toMatchObject({ defaultExportStyle: "themed", docExportFont: "serif" });
+		expect(splitPatch({ docExportFont: "sans", defaultExportStyle: "document" }).synced).toEqual({ docExportFont: "sans", defaultExportStyle: "document" });
+	});
 	it("smoothing defaults to medium and rejects unknown levels", () => {
 		expect(sanitizeSynced(null).smoothing).toBe("medium");
 		expect(sanitizeSynced({ smoothing: "light" }).smoothing).toBe("light");

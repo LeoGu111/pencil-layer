@@ -10,6 +10,8 @@ import { ReadingInk } from "./readingView"; // Stage D
 import type { SmoothingLevel } from "./smoothing";
 import { InkKeys } from "./inkKeys"; // [Stage F]
 import { PdfExporter } from "./exportPdf"; // [Stage H]
+import type { ExportChoice, ExportOptions } from "./exportOnce";
+import { DocFont, ExportStyle, styleExportLabel } from "./docStyle";
 import {
 	ActiveTool,
 	DEFAULT_PEN_WIDTHS,
@@ -90,7 +92,7 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 		this.reading = new ReadingInk(this);
 		this.reading.install(this);
 		// [Stage H] one-shot "Export PDF with / without ink" (commands + ⋯ menu); the toggle is untouched.
-		this.pdfExport = new PdfExporter(this.app, () => this.settings.includeInkInPdf);
+		this.pdfExport = new PdfExporter(this.app, () => ({ include: this.settings.includeInkInPdf, style: this.settings.defaultExportStyle }));
 		this.register(() => this.pdfExport?.destroy());
 		// Keep undo/redo buttons in sync with every file's history.
 		this.register(this.store.observeAll(() => this.refreshHistory()));
@@ -345,12 +347,13 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 		return !!this.pdfExport?.canExport(view);
 	}
 
-	exportPdf(view: MarkdownView, include: boolean): void {
-		this.pdfExport?.run(include, view);
+	exportPdf(view: MarkdownView, choice: ExportChoice): void {
+		this.pdfExport?.run(choice, view);
 	}
 
-	printIncludesInk(): boolean {
-		return this.pdfExport ? this.pdfExport.takeInclude() : this.settings.includeInkInPdf;
+	printOptions(): ExportOptions {
+		if (this.pdfExport) return this.pdfExport.takeOptions();
+		return { include: this.settings.includeInkInPdf, style: this.settings.defaultExportStyle };
 	}
 
 	private toggleToolbar(): void {
@@ -460,18 +463,21 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 			callback: () => this.toggleEraser(),
 		});
 		// [Stage H] one-shot: they apply to that export only ("Include ink in PDF export" stays as set).
-		const exportCmd = (id: string, name: string, include: boolean) =>
+		const exportCmd = (id: string, name: string, choice: ExportChoice) =>
 			this.addCommand({
 				id,
 				name,
 				checkCallback: (checking) => {
 					if (!this.pdfExport?.canExport()) return false;
-					if (!checking) this.pdfExport.run(include);
+					if (!checking) this.pdfExport.run(choice);
 					return true;
 				},
 			});
-		exportCmd("export-pdf-with-ink", "Export to PDF with ink", true);
-		exportCmd("export-pdf-without-ink", "Export to PDF without ink", false);
+		exportCmd("export-pdf-with-ink", "Export to PDF with ink", { include: true });
+		exportCmd("export-pdf-without-ink", "Export to PDF without ink", { include: false });
+		// Document style: a plain word-processor look for this one export (ink per the toggle).
+		exportCmd("export-pdf-document-style", "Export to PDF (document style)", { style: "document" });
+		exportCmd("export-pdf-themed-style", "Export to PDF (themed style)", { style: "themed" });
 		if (!Platform.isMobile) {
 			// [Stage F]
 			this.addCommand({
@@ -629,6 +635,26 @@ class PencilSettingTab extends PluginSettingTab {
 			.setName("Include ink in PDF export (this device)")
 			.setDesc("Draw the ink in Obsidian's \"Export to PDF\". The commands \"Export to PDF with ink\" / \"without ink\" set this and start the export.")
 			.addToggle((t) => t.setValue(s.includeInkInPdf).onChange((v) => this.plugin.updateSettings({ includeInkInPdf: v })));
+		new Setting(containerEl)
+			.setName("Default export style")
+			.setDesc(`Themed: the PDF looks like the note in Obsidian (theme, snippets). Document: a plain document look (white page, black text, 12 pt, plain headings), handy for handing in work. Used by Obsidian's own export and "Export PDF with / without ink"; the ⋯ menu also offers the other style ("${styleExportLabel("document")}" / "${styleExportLabel("themed")}") for one export.`)
+			.addDropdown((d) =>
+				d
+					.addOption("themed", "Themed")
+					.addOption("document", "Document")
+					.setValue(s.defaultExportStyle)
+					.onChange((v) => this.plugin.updateSettings({ defaultExportStyle: v as ExportStyle })),
+			);
+		new Setting(containerEl)
+			.setName("Document style font")
+			.setDesc("Font of the document-style PDF export (12 pt). Serif: Times New Roman (or Times, Georgia). Sans: Calibri (or Aptos, Carlito, Arial).")
+			.addDropdown((d) =>
+				d
+					.addOption("serif", "Serif (Times New Roman)")
+					.addOption("sans", "Sans (Calibri)")
+					.setValue(s.docExportFont)
+					.onChange((v) => this.plugin.updateSettings({ docExportFont: v as DocFont })),
+			);
 		if (!Platform.isMobile) {
 			new Setting(containerEl)
 				.setName("Mouse draws (this device)")

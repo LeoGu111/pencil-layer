@@ -937,6 +937,18 @@
 	padding-bottom: 0 !important;
 }
 
+/* Ink is measured on screen media, the PDF printed on print media. Obsidian's preview reserves a
+   scrollbar gutter on screen (`scrollbar-gutter: stable`, ~12 px on desktop) that print doesn't
+   have (print hides scrollbars), so text measured for the export wrapped narrower than it prints
+   and ink anchored to a character landed a word off. No gutter or scrollbar in the export: the
+   same width both times. */
+.print .markdown-preview-view {
+	scrollbar-gutter: auto !important;
+}
+.print .markdown-preview-view::-webkit-scrollbar {
+	display: none;
+}
+
 /* "ink" = theme text color (--pl-ink falls back to --text-normal). Printed on white it must be dark,
    whatever the theme. (Obsidian's own PDF export gets a literal dark color from readingView.ts.) */
 .print .pl-reading-ink {
@@ -1236,4 +1248,242 @@ body.theme-light {
 /* Windows / Android: a hovering pen stops the browser from panning on its drag (inkView setPenNear). */
 .cm-scroller.pl-pen-near {
 	touch-action: none;
+}
+
+/* ---------- Document-style PDF export (docStyle.ts; readingView.ts applyStyle) ----------
+   During a document-style export only, the export's `.print` root gets the class `pl-doc-style`: a
+   plain word-processor look whatever the theme or snippets. Rules start with
+   `:is(#pl-doc-style, .print.pl-doc-style)` — it matches by the class but counts as an id (1,0,x),
+   which beats any class-based theme/snippet rule, !important against !important — and set
+   properties directly (themes may redefine variables below the root). Math
+   (MathJax) and our ink/space blocks are left alone except for color/size. */
+:is(#pl-doc-style, .print.pl-doc-style) {
+	--pl-doc-mono: Consolas, "Courier New", Courier, monospace;
+	--text-normal: #000000;
+	--text-muted: #000000;
+	--text-faint: #595959;
+	--text-accent: #000000;
+	--text-accent-hover: #000000;
+	--text-highlight-bg: #fff59d;
+	--background-primary: #ffffff;
+	--background-secondary: #ffffff;
+	--background-modifier-border: #000000;
+	--h1-color: #000000;
+	--h2-color: #000000;
+	--h3-color: #000000;
+	--h4-color: #000000;
+	--h5-color: #000000;
+	--h6-color: #000000;
+	--bold-color: #000000;
+	--italic-color: #000000;
+	--link-color: #000000;
+	--link-color-hover: #000000;
+	--link-external-color: #000000;
+	--link-external-color-hover: #000000;
+	--link-unresolved-color: #000000;
+	--tag-color: #000000;
+	--tag-background: transparent;
+	--code-normal: #000000;
+	--code-background: #f2f2f2;
+	--blockquote-border-color: #808080;
+	--hr-color: #a6a6a6;
+	--list-marker-color: #000000;
+	--table-border-color: #000000;
+	--callout-color: 0, 0, 0;
+	--font-text: var(--pl-doc-font);
+	--font-text-size: 12pt;
+	--line-height-normal: 1.15;
+	color: #000000 !important;
+	font-family: var(--pl-doc-font) !important;
+	font-size: 12pt !important;
+	line-height: 1.15 !important;
+}
+
+/* Everything inside: black text in the document font, no theme decoration. */
+:is(#pl-doc-style, .print.pl-doc-style) :where(*:not(mjx-container, mjx-container *, .pl-reading-ink, .pl-reading-ink *, .pl-reading-space, .pl-reading-space *, .pl-reading-room)) {
+	color: #000000 !important;
+	-webkit-text-fill-color: currentColor !important;
+	font-family: var(--pl-doc-font) !important;
+	font-size: inherit !important;
+	line-height: inherit !important;
+	letter-spacing: normal !important;
+	word-spacing: normal !important;
+	text-transform: none !important;
+	text-shadow: none !important;
+	text-decoration-color: currentColor !important;
+	background: transparent none !important;
+	box-shadow: none !important;
+	border-style: none !important;
+	border-radius: 0 !important;
+	outline: none !important;
+	filter: none !important;
+	mix-blend-mode: normal !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) .markdown-preview-view,
+:is(#pl-doc-style, .print.pl-doc-style) .markdown-rendered {
+	background: #ffffff !important;
+}
+
+/* Paragraphs: no first-line indent, 8 pt after. */
+:is(#pl-doc-style, .print.pl-doc-style) p {
+	margin: 0 0 8pt !important;
+	text-indent: 0 !important;
+}
+
+/* Headings: plain black, bold, word-processor sizes; no theme ornaments. */
+:is(#pl-doc-style, .print.pl-doc-style) :is(h1, h2, h3, h4, h5, h6) {
+	font-weight: 700 !important;
+	font-style: normal !important;
+	font-variant: normal !important;
+	line-height: 1.15 !important;
+	margin: 12pt 0 4pt !important;
+	padding: 0 !important;
+	text-align: start !important;
+	text-decoration: none !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) h1 { font-size: 18pt !important; }
+:is(#pl-doc-style, .print.pl-doc-style) h2 { font-size: 15pt !important; }
+:is(#pl-doc-style, .print.pl-doc-style) h3 { font-size: 13pt !important; }
+:is(#pl-doc-style, .print.pl-doc-style) :is(h4, h5, h6) { font-size: 12pt !important; }
+:is(#pl-doc-style, .print.pl-doc-style) :is(h5, h6) { font-style: italic !important; }
+:is(#pl-doc-style, .print.pl-doc-style) :is(h1, h2, h3, h4, h5, h6, blockquote, hr, .callout, .callout-title)::before,
+:is(#pl-doc-style, .print.pl-doc-style) :is(h1, h2, h3, h4, h5, h6, blockquote, hr, .callout, .callout-title)::after {
+	content: none !important;
+	display: none !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) .heading-collapse-indicator,
+:is(#pl-doc-style, .print.pl-doc-style) .collapse-indicator {
+	display: none !important;
+}
+
+/* Lists: black markers. */
+:is(#pl-doc-style, .print.pl-doc-style) li::marker {
+	color: #000000 !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) .list-bullet::after {
+	background-color: #000000 !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) input[type="checkbox"] {
+	-webkit-appearance: checkbox !important;
+	appearance: auto !important;
+	accent-color: #000000;
+	background: none !important;
+	border: none !important;
+	filter: grayscale(1) !important;
+}
+
+/* Emphasis keeps its meaning. */
+:is(#pl-doc-style, .print.pl-doc-style) :is(strong, b) { font-weight: 700 !important; }
+:is(#pl-doc-style, .print.pl-doc-style) :is(em, i) { font-style: italic !important; }
+:is(#pl-doc-style, .print.pl-doc-style) :is(sup, sub) { font-size: 75% !important; line-height: 0 !important; }
+
+/* Links: black, underlined; no external-link icon. */
+:is(#pl-doc-style, .print.pl-doc-style) a,
+:is(#pl-doc-style, .print.pl-doc-style) .internal-link,
+:is(#pl-doc-style, .print.pl-doc-style) .external-link {
+	color: #000000 !important;
+	text-decoration: underline !important;
+	padding-right: 0 !important;
+	font-weight: inherit !important;
+}
+
+/* Tags: plain text. */
+:is(#pl-doc-style, .print.pl-doc-style) .tag,
+:is(#pl-doc-style, .print.pl-doc-style) a.tag {
+	padding: 0 !important;
+	margin: 0 !important;
+	text-decoration: none !important;
+	font-weight: inherit !important;
+}
+
+/* Highlight: the only color, light yellow. */
+:is(#pl-doc-style, .print.pl-doc-style) mark,
+:is(#pl-doc-style, .print.pl-doc-style) .cm-highlight {
+	background: #fff59d !important;
+	color: #000000 !important;
+	padding: 0 !important;
+	margin: 0 !important;
+}
+
+/* Code: monospace on light grey. */
+:is(#pl-doc-style, .print.pl-doc-style) :is(code, kbd, samp, pre, pre *) {
+	font-family: var(--pl-doc-mono) !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) :not(pre) > code {
+	font-size: 10.5pt !important;
+	background: #f2f2f2 !important;
+	padding: 0 2pt !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) pre {
+	font-size: 10pt !important;
+	line-height: 1.2 !important;
+	background: #f2f2f2 !important;
+	border: 1px solid #d9d9d9 !important;
+	padding: 6pt 8pt !important;
+	margin: 0 0 8pt !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) pre code {
+	font-size: inherit !important;
+	background: transparent !important;
+	padding: 0 !important;
+}
+
+/* Tables: thin black grid. */
+:is(#pl-doc-style, .print.pl-doc-style) table {
+	border-collapse: collapse !important;
+	border-spacing: 0 !important;
+	margin: 0 0 8pt !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) :is(th, td) {
+	border: 1px solid #000000 !important;
+	padding: 2pt 6pt !important;
+	vertical-align: top !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) th {
+	font-weight: 700 !important;
+}
+
+/* Blockquotes and callouts: plain bordered boxes, no icons. */
+:is(#pl-doc-style, .print.pl-doc-style) blockquote,
+:is(#pl-doc-style, .print.pl-doc-style) .callout {
+	border: 1px solid #808080 !important;
+	padding: 4pt 8pt !important;
+	margin: 0 0 8pt !important;
+	font-style: normal !important;
+	quotes: none !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) .callout-icon,
+:is(#pl-doc-style, .print.pl-doc-style) .callout-fold {
+	display: none !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) .callout-title {
+	font-weight: 700 !important;
+	padding: 0 !important;
+	gap: 0 !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) .callout-title-inner {
+	font-weight: 700 !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) .callout-content {
+	padding: 0 !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) :is(blockquote, .callout-content) > :last-child {
+	margin-bottom: 0 !important;
+}
+
+/* Horizontal rule: thin grey. */
+:is(#pl-doc-style, .print.pl-doc-style) hr {
+	border: none !important;
+	border-top: 1px solid #a6a6a6 !important;
+	height: 0 !important;
+	margin: 8pt 0 !important;
+}
+
+/* Math: black, the size of the body text (overrides snippets that enlarge it). */
+:is(#pl-doc-style, .print.pl-doc-style) mjx-container {
+	color: #000000 !important;
+	font-size: 100% !important;
+}
+:is(#pl-doc-style, .print.pl-doc-style) .math {
+	font-size: inherit !important;
 }

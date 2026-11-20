@@ -1,7 +1,7 @@
 {
 	"id": "pencil-layer",
 	"name": "Pencil Layer",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"minAppVersion": "1.8.7",
 	"description": "Handwrite, sketch, and highlight right on top of your notes with a stylus: the pen draws, your finger scrolls, and the keyboard keeps typing.",
 	"author": "standw7",

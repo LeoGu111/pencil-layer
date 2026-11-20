@@ -46,6 +46,7 @@ Pencil Layer adds a transparent ink layer over the editor (Live Preview and Sour
 - **Scribble to erase** and **double-tap to toggle the eraser** (both optional).
 - **Drawing spaces.** Protected blank areas between paragraphs for diagrams. They grow as you draw near the bottom, can be resized, and move with their paragraph. Drawing below the end of a note creates one automatically.
 - **Reading view and PDF export.** Ink renders in Reading view and in Obsidian's "Export to PDF". You can export with or without ink, and tall drawings are split cleanly across pages on white paper.
+- **Document-style PDFs.** One tap exports a note that looks like a plain word-processor document (Times New Roman or Calibri at 12 pt, black headings, simple tables), whatever your theme. Handy for handing in homework.
 - **Dark-mode-aware ink.** Black ink turns light in dark themes, and white ink turns dark in light themes. PDFs always print dark ink on white paper.
 - **Screenshots** of a selection, with or without the text underneath. You can share them, copy them, save them to the vault or insert them into the note.
 - **Desktop Select tool.** Rearrange ink with the mouse, with keyboard shortcuts.
@@ -90,6 +91,7 @@ On a computer without a pen, open the toolbar's **⋯ → Mouse draws** to draw 
   - Hide ink / Show ink
   - Include ink in PDF export (toggle)
   - Export PDF with ink / Export PDF without ink
+  - Export PDF (document style), or Export PDF (themed style) when your default export style is Document
   - Mouse draws (desktop only)
   - Move toolbar to bottom center (when it has been moved)
 - The toolbar's position, edge and collapsed state are saved per device. The toolbar is hidden in Reading view. To hide it entirely, use the ribbon icon (pencil), the **Toggle ink toolbar** command, or the settings.
@@ -185,6 +187,7 @@ Choose **Screenshot** in the lasso menu to open a dialog with a crop frame aroun
 
 - Ink shows in **Reading view**, placed next to the same blocks as in the editor. Drawings below a paragraph get room so they don't cover the next block.
 - **Export to PDF:** Obsidian's own **Export to PDF** includes ink when **Include ink in PDF export** is on (the default, per device). For a single export, use **⋯ → Export PDF with ink / without ink** or the commands of the same name. They don't change the toggle.
+- **Document style:** **⋯ → Export PDF (document style)** (or the command **Export to PDF (document style)**) exports this one note like a plain Word document: white page, black text in a classic font at 12 pt with 1.15 line spacing, plain black headings, black underlined links, thin black table borders, code in a monospace font on light grey, callouts and quotes as simple boxes without colors or icons, tags as plain text, thin grey horizontal rules, `==highlights==` in light yellow, and math in black at the text size. It ignores your theme and CSS snippets for that export only; your notes and Obsidian look unchanged. Ink follows the **Include ink in PDF export** toggle and is placed against the document-style text, so marks over words stay on their words. Pick the font (Serif = Times New Roman, Sans = Calibri) under **Document style font**. If you want every export to look like this, set **Default export style** to **Document**: Obsidian's own Export to PDF and the with/without-ink entries then use it, and the menu offers **Export PDF (themed style)** instead.
 - PDFs are always **white paper with dark ink**, whatever your theme. Drawing spaces taller than a page are split between rows of writing, never through them, and a space that doesn't fit at the bottom of a page moves to the next page.
 
 ### Dark mode
@@ -229,6 +232,7 @@ All commands are in the command palette, and none has a default hotkey. You can 
 | Select pen / highlighter / eraser / lasso | Switch tools |
 | Toggle eraser | Current tool ↔ eraser |
 | Export to PDF with ink / without ink | One-off PDF export |
+| Export to PDF (document style) / (themed style) | One-off PDF export in that style (ink per the toggle) |
 | Toggle select tool (mouse selects ink) | Desktop, slim toolbar |
 | Toggle mouse draws | Desktop |
 
@@ -241,6 +245,8 @@ All commands are in the command palette, and none has a default hotkey. You can 
 | Show ink toolbar on this device | On | This device | The floating toolbar. |
 | Show ink | On | Synced | Hide ink without deleting it. |
 | Include ink in PDF export | On | This device | Whether Obsidian's own "Export to PDF" draws ink. |
+| Default export style | Themed | Synced | Themed (looks like Obsidian) or Document (plain word-processor look) for Obsidian's own export and "Export PDF with / without ink". |
+| Document style font | Serif | Synced | Serif (Times New Roman, Times, Georgia) or Sans (Calibri, Aptos, Carlito, Arial) for document-style PDFs. |
 | Mouse draws | Off | This device, desktop | Draw with the left mouse button. |
 | Pen on this device | Off (turns on when a pen is used) | This device, desktop | Full drawing toolbar for a pen even when the mouse doesn't draw. |
 | Pen feel | Ballpoint | Synced | Ballpoint or Fountain pen (pressure-sensitive). |
@@ -294,6 +300,7 @@ The current tool, pen preset, colors and highlighter width are remembered too (s
 - Loose (line-anchored) ink that crosses a page break in a PDF breaks wherever the browser breaks the block. Use a drawing space for diagrams you want to print.
 - Width matters: keep **Readable line length** on so ink lines up across devices and window sizes. With it off, ink stays at its pixel position while the text re-wraps.
 - PDF export on iPad/iPhone has been tested less than on desktop.
+- In a document-style PDF the text is usually smaller and more tightly spaced than in the editor, but ink keeps the size you drew it at. Marks follow their words and lines, yet a big circle around a phrase can overlap the line above or below it. The Sans font is closer in width to Obsidian's default font.
 - Undo history is not kept after closing a note or Obsidian.
 - Older versions of the plugin on another device may show drawing-space ink in the wrong place, so update every device.
 - Ink is not searchable text (no handwriting recognition).

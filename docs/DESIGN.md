@@ -603,7 +603,7 @@ installed from main.ts). The editor overlay is untouched; Reading view has its o
   `exportOnce.ts`, tested) arms an override, makes the toolbar's leaf active (no focus) and runs
   `workspace:export-pdf`. That export is asynchronous: its dialog (a Modal) → on desktop "Export"
   awaits a native save dialog (cancelling it leaves the dialog open) → the dialog closes → the hidden
-  render runs our print post-processor once, which calls `printIncludesInk()` = `take`: the override
+  render runs our print post-processor once, which calls `printOptions()` (was `printIncludesInk()`) = `take`: the override
   if pending, else the toggle, and always consumes it. The dialog is watched with a
   MutationObserver on `<body>` (`.modal-container` added/removed): while it is open the override
   waits (fallback expiry 30 min); when it closes (Export or Cancel) the override survives only a
@@ -846,6 +846,67 @@ below the end and an "end" space was made — the drawing ended up split between
   section is placed by the continuous layout (off by the blank space before a forced break). Text color
   in a dark-theme iPad export depends on Obsidian's own print styles (only the background and ink are forced).
 
+## Document-style PDF export (docStyle.ts)
+Request: an export that looks like a plain Word document for handing in homework, because the
+Obsidian theme (Origami, snippets) is "a little much" on paper. The themed export stays as it was.
+- **Entry points.** ⋯ menu (below "Export PDF with / without ink"): the style that is *not* the
+  default — **Export PDF (document style)**, or **Export PDF (themed style)** when the default is
+  Document (`otherStyle`, `styleExportLabel`). Commands **Export to PDF (document style)** /
+  **(themed style)**. Settings (synced): **Default export style** (`defaultExportStyle`, themed |
+  document; used by Obsidian's own export and the with/without-ink entries) and **Document style
+  font** (`docExportFont`, serif | sans → `DOC_FONT_STACKS`: `"Times New Roman", Times, Georgia,
+  serif` / `Calibri, Aptos, Carlito, Arial, sans-serif`).
+- **One-shot override.** The Stage H override now carries an `ExportChoice` `{include?, style?}`;
+  `take(o, defaults, now)` returns the effective `{include, style}` (unset fields from the toggle /
+  default style) and consumes it, so "document style" applies to that export only and ink follows the
+  toggle. `PdfExporter.run(choice)`, `takeOptions()`; the host's `printOptions()` replaces
+  `printIncludesInk()`.
+- **Styling.** The print post-processor (`applyStyle`, synchronously, before anything is measured
+  and even when there is no ink) adds `pl-doc-style` to the export's `.print` root and sets
+  `--pl-doc-font` inline. Never removed: the root is printed after the post-processors resolve and
+  then discarded. styles.css rules start with `:is(#pl-doc-style, .print.pl-doc-style)` — it matches
+  by the class but has id specificity, which beats any class-based theme/snippet rule (!important
+  against !important). Root: theme variables reset (text, headings, links, tags, code, callouts,
+  `--font-text`), black 12 pt / 1.15. Everything inside except MathJax (`mjx-container` and below) and
+  our ink/space blocks: black text, document font, inherited size/line height, no backgrounds, shadows,
+  borders, filters, `-webkit-text-fill-color` (gradient-text headings) or text transforms. Then:
+  headings bold black 18/15/13/12 pt (h5/h6 italic), no theme ::before/::after ornaments; `p` 0 0 8 pt;
+  black list markers; native grey checkboxes; links black underlined (no external icon); tags plain;
+  `mark` #fff59d; code monospace (`Consolas, "Courier New"`) on #f2f2f2; tables collapsed 1 px black;
+  blockquotes and callouts 1 px grey boxes, no icon/fold; `hr` 1 px #a6a6a6; `mjx-container` black at
+  100 % (overrides snippets enlarging math).
+- **Ink against document-style text.** Ink is laid out after `applyStyle`, so block heights, line
+  marks and character rects are those of the document text (same `drawSection` path as the themed
+  export; spaces and page slices unchanged). Text rows are usually much shorter than the editor's
+  (12 pt × 1.15 = 18.4 px vs e.g. 24–29 px), while ink keeps its drawn size, so the *distance* of a
+  stroke from its anchor is scaled (`inkYScale` = container line height / the editor's CM
+  `defaultLineHeight` — the note's open editor, else any; 1 when unknown or within 5 %; `scaleInkY`,
+  pure + tested): the stroke's vertical center moves to `anchorTop + r × offset`, rigidly. For a
+  character anchor only the part of the offset outside the glyph's rect is scaled (the glyph box is
+  the font box, about equal in both), so an underline just below a word stays just below it; for a
+  line anchor the offset from the line top scales (a mark mid-line stays mid-line). x is not scaled
+  (the anchor character is the one nearest the stroke's center). Themed exports use r = 1.
+- **Fix found on the way (both styles).** Obsidian's `.markdown-preview-view` reserves a scrollbar
+  gutter on screen (`scrollbar-gutter: stable`, 12 px on desktop) that print media doesn't have, so the
+  text measured for the export was 12 px narrower than printed: a paragraph that rewrapped put
+  character-anchored ink a word off. styles.css drops the gutter/scrollbar under `.print`.
+- **Verified** (headless Obsidian 1.15, throwaway profile and vault, a loud test theme with colored
+  gradient headings, colored backgrounds, striped purple tables, dark code blocks, pill tags, and a
+  snippet enlarging math to 150 %; desktop export through Obsidian's dialog with the save dialog
+  stubbed, Letter, PDF → PNG): document style prints plain black text in Liberation Serif /
+  Liberation Sans (the metric-compatible fallbacks on Linux), black headings, plain tables/callouts/
+  quote, grey code box, yellow highlight, black math at text size; themed output unchanged. Ink: an
+  ellipse over a highlighted phrase, underlines (char-anchored), a circle around inline math and
+  a check mark beside a table row (line-anchored), and a drawing space with a graph all land on their
+  text/places; the space moves whole to page 2 as before. Default style = Document makes Obsidian's
+  own export plain; switching back makes it themed again.
+- **Known limits.** Ink is not resized: a large circle around a phrase is relatively bigger next to
+  12 pt text and may overlap the rows above/below; ink drawn in the leading between two editor rows
+  lands right at the next row in print. A word that barely fits a printed line (sub-pixel) can wrap
+  differently on screen and in print, shifting character-anchored ink on the rows after it (seen once
+  with the Sans font). Mobile (iPad) document-style export is untested here; it uses the same
+  `.print` root and styles.
+
 ## Toolbar (M2 Stage A2 floating capsule; A3 orientation/collapse/pencil; E tool popovers; M grip)
 One per Markdown leaf, absolutely positioned inside `.workspace-leaf-content` (below the view header),
 floating over the note at the **bottom-center** by default. A capsule (border-radius = thickness/2) with a
@@ -919,6 +980,7 @@ Settings (`settings.ts`, pure + tested) are split:
 - **Synced** (`data.json`): tool, pen preset/color, highlighter color/width, pen feel, pen widths, ink visible,
   snap to shape (on) + hold delay (500 ms, 200–1500), double-tap toggles eraser (off), scribble to erase
   (off), highlighter snaps to text (`highlighterSnapText`, on; Stage C — toggle in the highlighter popover),
+  default export style (`defaultExportStyle`, themed) and document style font (`docExportFont`, serif),
   `settingsVersion` (2). Migration to v2 (once, then saved): `doubleTapEraser` → false and a hold
   delay of exactly 450 ms (the old default) → 500 ms.
 - **Per device** (`app.saveLocalStorage("pencil-layer:device")`, fallback `window.localStorage`):
@@ -936,7 +998,7 @@ Settings (`settings.ts`, pure + tested) are split:
   M1's `toolbarVisible`/`mouseDraws`/`penSize`/`highlighterSize` keys are removed from `data.json` on load.
 Ribbon icon + command toggle the toolbar. Commands: undo/redo ink, select pen/highlighter/eraser/lasso,
 toggle eraser (no default hotkey), add drawing space below cursor line (Stage K), show/hide ink, toggle mouse draws (desktop), toggle select tool
-(desktop, Stage F; no default hotkey), export to PDF with / without ink (Stage D; one-shot since Stage H).
+(desktop, Stage F; no default hotkey), export to PDF with / without ink (Stage D; one-shot since Stage H), export to PDF (document style / themed style).
 
 ## Stage F — ink selection on the Mac (desktop Select tool)
 The Mac is for reading; Stage F lets it rearrange existing ink (select, move, resize, delete,
@@ -1062,6 +1124,7 @@ src/readingMap.ts      Stage D: strokes → sections, y-mapping, PDF block align
 src/readingView.ts     Stage D: Reading view / PDF export post-processor, per-section SVGs
 src/exportOnce.ts      Stage H: one-shot PDF export override state (pure, tested)
 src/exportPdf.ts       Stage H: one-shot export commands/menu runner (watches Obsidian's export dialog)
+src/docStyle.ts        Document-style PDF export: styles, fonts, labels, ink y-scale (pure, tested)
 src/spaces.ts          Stage K: drawing spaces — block placement, ink → space, growth/resize, Make drawing space, reading placement (pure, tested)
 src/inkCopy.ts         Public API: ink lines of a note, copy ink to a reorganized note (pure, tested)
 src/api.ts             Public API (`plugin.api`, type PencilLayerApi): Obsidian glue over inkCopy + store
