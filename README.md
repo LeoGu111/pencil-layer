@@ -54,16 +54,45 @@ Pencil Layer adds a transparent ink layer over the editor (Live Preview and Sour
 
 ## Installation
 
-**From Community plugins (once accepted).** Open **Settings → Community plugins → Browse**, search for "Pencil Layer", then install and enable it.
+Pencil Layer is installed like any other community plugin. The steps are the same on iPad, iPhone, Android, Mac, Windows and Linux. It needs Obsidian 1.8.7 or newer.
 
-**Before that: with BRAT.**
-1. Install and enable the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin from Community plugins.
-2. Run the command **BRAT: Add a beta plugin for testing** and enter `standw7/pencil-layer`.
-3. Enable **Pencil Layer** under **Settings → Community plugins**.
+### Step 0: turn on community plugins (first time only)
 
-**Manually.** Download `main.js`, `manifest.json` and `styles.css` from the latest [release](https://github.com/standw7/pencil-layer/releases). Put them in `<your vault>/.obsidian/plugins/pencil-layer/`, then reload Obsidian and enable the plugin.
+1. Open **Settings** (the gear icon; on iPad/iPhone, open the left sidebar and tap the gear).
+2. Go to **Community plugins**.
+3. If you see **Restricted mode is on**, tap **Turn on community plugins**.
 
-The plugin needs Obsidian 1.8.7 or newer. It works on desktop and mobile.
+### Option A: from Community plugins (once Pencil Layer is listed)
+
+1. **Settings → Community plugins → Browse**.
+2. Search for **Pencil Layer** and tap it.
+3. Tap **Install**, then **Enable**.
+
+Updates appear under **Settings → Community plugins → Check for updates**.
+
+### Option B: with BRAT (works right now, recommended until it's listed)
+
+[BRAT](https://github.com/TfTHacker/obsidian42-brat) installs plugins straight from GitHub and keeps them updated.
+
+1. **Settings → Community plugins → Browse**, search for **BRAT**, then **Install** and **Enable**.
+2. Go to **Settings → BRAT** (under "Community plugins" in the settings sidebar) and tap **Add beta plugin**.
+3. Paste `standw7/pencil-layer` as the repository, keep "latest version", and tap **Add plugin**.
+4. Go back to **Settings → Community plugins** and make sure **Pencil Layer** is switched on.
+
+BRAT checks for new versions when Obsidian starts, so you get updates automatically.
+
+### Option C: manual install (desktop)
+
+1. Download `main.js`, `manifest.json` and `styles.css` from the latest [release](https://github.com/standw7/pencil-layer/releases/latest).
+2. In your vault folder, open the hidden `.obsidian/plugins/` folder and create a folder named `pencil-layer` inside it (on macOS press Cmd+Shift+. in Finder to show hidden folders; on Windows enable "Hidden items" in File Explorer's View menu).
+3. Put the three files in `<your vault>/.obsidian/plugins/pencil-layer/`.
+4. Restart Obsidian, then enable **Pencil Layer** under **Settings → Community plugins**.
+
+Manual installs don't update themselves; repeat these steps for each new release. On iPad/iPhone, use Option A or B instead, since the hidden plugin folder is hard to reach in the Files app.
+
+### Using it on several devices
+
+Install the plugin on each device (or let Obsidian Sync sync your plugins: **Settings → Sync → Installed community plugins**). Keep every device on the same version, since an older version can drop newer data when it saves.
 
 ## Getting started
 
