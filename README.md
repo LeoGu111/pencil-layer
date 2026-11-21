@@ -4,7 +4,6 @@ Handwrite, sketch, and highlight right on top of your Markdown notes with a styl
 
 Pencil Layer adds a transparent ink layer over the editor (Live Preview and Source mode). Ink is attached to the lines of your note, so it moves with the text when you type above it. It shows up in Reading view and in PDF exports, and it is saved in small JSON files next to your notes. Your Markdown is never modified by ink.
 
-<!-- TODO: add screenshots / a short GIF of the toolbar, a drawing space and a PDF export. -->
 
 - [Features](#features)
 - [Installation](#installation)

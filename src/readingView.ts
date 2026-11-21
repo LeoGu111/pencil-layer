@@ -235,10 +235,13 @@ function inkSvg(doc: Document, strokes: readonly Stroke[], print: boolean, top =
  * A space block: `height` px of room with the space's ink (points relative to its top-left), in
  * z-order. `pad` (≥ 0) = room above it that moves it down to where the editor shows it.
  */
+/** An aria-hidden div created in `doc` (popout-window safe) but not yet attached anywhere. */
+function detachedDiv(doc: Document, cls: string): HTMLDivElement {
+	return doc.createDocumentFragment().createDiv({ cls, attr: { "aria-hidden": "true" } });
+}
+
 function spaceBlock(doc: Document, slot: SpaceSlot, ink: InkFile, print: boolean, pageHeight?: number): HTMLElement {
-	const div = doc.createElement("div");
-	div.className = SPACE_CLASS;
-	div.setAttribute("aria-hidden", "true");
+	const div = detachedDiv(doc, SPACE_CLASS);
 	div.setAttribute("data-pl-space", slot.id);
 	Object.assign(div.style, { position: "relative", display: "block", height: `${slot.height}px`, margin: "0", padding: "0", boxSizing: "content-box" });
 	// A space that fits on a page never breaks across pages (its drawing stays whole). [Stage L] A
@@ -289,16 +292,12 @@ function paginateSpaces(container: HTMLElement, origin: number, pageHeight: numb
 		const parts: HTMLElement[] = [];
 		if (plan.breakFirst && pad > 0) {
 			// Too little room on this page: the pad stays here, the drawing starts on the next page.
-			const sp = doc.createElement("div");
-			sp.className = SLICE_CLASS;
-			sp.setAttribute("aria-hidden", "true");
+			const sp = detachedDiv(doc, SLICE_CLASS);
 			Object.assign(sp.style, { display: "block", height: `${pad}px`, margin: "0", padding: "0" });
 			parts.push(sp);
 		}
 		plan.slices.forEach((sl, k) => {
-			const div = doc.createElement("div");
-			div.className = `${SPACE_CLASS} ${SLICE_CLASS}`;
-			div.setAttribute("aria-hidden", "true");
+			const div = detachedDiv(doc, `${SPACE_CLASS} ${SLICE_CLASS}`);
 			div.setAttribute("data-pl-space", id);
 			div.setAttribute("data-pl-slice", String(k));
 			const top = k === 0 && !plan.breakFirst ? pad : 0;
@@ -575,10 +574,7 @@ function setGap(el: HTMLElement, px: number, room = false, contentHeight?: numbe
 	}
 	el.setAttribute(GAP_ATTR, want);
 	if (room) {
-		const sp = el.ownerDocument.createElement("div");
-		sp.className = ROOM_CLASS;
-		sp.setAttribute("aria-hidden", "true");
-		el.appendChild(sp);
+		const sp = el.createDiv({ cls: ROOM_CLASS, attr: { "aria-hidden": "true" } });
 		// `px` is counted from the content's bottom; the spacer starts below the last child's bottom
 		// margin, so subtract what is already there (one layout read; only the last section).
 		const already = sp.getBoundingClientRect().top - el.getBoundingClientRect().top - (contentHeight ?? 0);

@@ -175,24 +175,15 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 		} catch {
 			/* fall through */
 		}
-		try {
-			const raw = window.localStorage.getItem(`${this.app.vault.getName()}:${LOCAL_KEY}`);
-			return raw ? JSON.parse(raw) : null;
-		} catch {
-			return null;
-		}
+		return null;
 	}
 
 	private saveLocal(): void {
 		const data = localOnly(this.settings);
 		try {
 			this.app.saveLocalStorage(LOCAL_KEY, data);
-		} catch {
-			try {
-				window.localStorage.setItem(`${this.app.vault.getName()}:${LOCAL_KEY}`, JSON.stringify(data));
-			} catch (err) {
-				console.error("[pencil-layer] failed to save device settings", err);
-			}
+		} catch (err) {
+			console.error("[pencil-layer] failed to save device settings", err);
 		}
 	}
 
