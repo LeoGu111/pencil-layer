@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPageGuideLayout, nextPageGuide, pageGuideMetrics, pageGuidePrintConfig } from "../src/pageGuides";
+import { buildPageGuideLayout, computeCanvasBottomPadding, nextPageGuide, pageGuideMetrics, pageGuidePrintConfig } from "../src/pageGuides";
 
 describe("pageGuides", () => {
 	it("computes exact PDF-matching dimensions for A4 and A3 portrait/landscape", () => {
@@ -32,5 +32,31 @@ describe("pageGuides", () => {
 		expect(nextPageGuide("Letter")).toBe("off");
 		expect(pageGuidePrintConfig("A3-landscape")).toEqual({ pageSize: "A3", landscape: true });
 		expect(pageGuidePrintConfig("off")).toBeNull();
+	});
+
+	it("provides ample scrollable bottom padding on empty notes and clamps labels inside narrow viewports", () => {
+		const a4 = pageGuideMetrics("A4")!;
+		const blankPad = computeCanvasBottomPadding({
+			format: "A4",
+			docHeight: 24,
+			viewportHeight: 900,
+			lowestInkY: 0,
+			extraPages: 2,
+		});
+		expect(blankPad).toBeGreaterThanOrEqual(a4.height * 2);
+
+		const inkPad = computeCanvasBottomPadding({
+			format: "A4",
+			docHeight: 24,
+			viewportHeight: 900,
+			lowestInkY: a4.height * 2.5,
+			extraPages: 2,
+		});
+		expect(inkPad).toBeGreaterThan(blankPad);
+
+		// A3 on a narrow 600 px viewport still keeps page labels visible inside the viewport.
+		const a3Layout = buildPageGuideLayout("A3", 600, 1500, 600)!;
+		expect(a3Layout.sheetWidth).toBeGreaterThan(900);
+		expect(a3Layout.labelRightX).toBeLessThanOrEqual(600);
 	});
 });

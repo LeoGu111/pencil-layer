@@ -96,6 +96,80 @@ function constantPressure(points: readonly Point[]): boolean {
 }
 
 /**
+ * Subdivide long segments caused by very fast stylus movement so `perfect-freehand` always gets
+ * dense samples and never pinches, twists, or breaks into disconnected segments. Uses Catmull-Rom
+ * interpolation along the stroke with linear pressure/tilt blending.
+ */
+export function densifyPoints(
+	points: readonly Point[],
+	maxStep = 6,
+	tilts?: readonly number[],
+): { points: Point[]; tilts?: number[] } {
+	const n = points.length;
+	if (n < 2 || maxStep <= 0) {
+		return { points: points.slice(), ...(tilts ? { tilts: tilts.slice() } : {}) };
+	}
+	let needsSplit = false;
+	const maxSq = maxStep * maxStep;
+	for (let i = 1; i < n; i++) {
+		const dx = points[i][0] - points[i - 1][0];
+		const dy = points[i][1] - points[i - 1][1];
+		if (dx * dx + dy * dy > maxSq) {
+			needsSplit = true;
+			break;
+		}
+	}
+	if (!needsSplit) {
+		return { points: points.slice(), ...(tilts ? { tilts: tilts.slice() } : {}) };
+	}
+	const outPts: Point[] = [points[0]];
+	const outTilts: number[] | undefined = tilts ? [tilts[0] ?? 0] : undefined;
+	for (let i = 1; i < n; i++) {
+		const p1 = points[i - 1];
+		const p2 = points[i];
+		const dist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+		if (dist > maxStep) {
+			const steps = Math.min(48, Math.ceil(dist / maxStep));
+			const p0 = points[Math.max(0, i - 2)];
+			const p3 = points[Math.min(n - 1, i + 1)];
+			const t1 = tilts?.[i - 1] ?? 0;
+			const t2 = tilts?.[i] ?? 0;
+			for (let k = 1; k < steps; k++) {
+				const t = k / steps;
+				const t2s = t * t;
+				const t3s = t2s * t;
+				// Centripetal-safe Catmull-Rom clamped near chord to prevent overshoot on huge jumps.
+				const crX =
+					0.5 *
+					(2 * p1[0] +
+						(-p0[0] + p2[0]) * t +
+						(2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2s +
+						(-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3s);
+				const crY =
+					0.5 *
+					(2 * p1[1] +
+						(-p0[1] + p2[1]) * t +
+						(2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2s +
+						(-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3s);
+				const linX = p1[0] + (p2[0] - p1[0]) * t;
+				const linY = p1[1] + (p2[1] - p1[1]) * t;
+				const dev = Math.hypot(crX - linX, crY - linY);
+				const maxDev = dist * 0.25;
+				const blend = dev > maxDev && dev > 0 ? maxDev / dev : 1;
+				const x = linX + (crX - linX) * blend;
+				const y = linY + (crY - linY) * blend;
+				const p = p1[2] + (p2[2] - p1[2]) * t;
+				outPts.push([x, y, p]);
+				if (outTilts) outTilts.push(t1 + (t2 - t1) * t);
+			}
+		}
+		outPts.push(p2);
+		if (outTilts) outTilts.push(tilts![i] ?? 0);
+	}
+	return { points: outPts, ...(outTilts ? { tilts: outTilts } : {}) };
+}
+
+/**
  * Stroke → SVG path `d`.
  * - Ballpoint / dashed pen (`isCenterline`): a smooth centerline (`centerlinePath`), to be rendered
  *   STROKED with `stroke-width = size`, round caps/joins (and `dashArray` for dashed), `fill: none`.
@@ -109,38 +183,45 @@ export function strokeToPath(stroke: StrokeShape, opts: PathOptions = {}): strin
 	if (stroke.points.length === 0) return "";
 	if (isCenterline(stroke)) return centerlinePath(stroke, offsetX, offsetY);
 	const style = penStyleOf(stroke);
-	const tilts = stroke.tilts;
+	const rawTilts = stroke.tilts;
 	const hasTilt =
 		!stroke.shape &&
-		!!tilts &&
-		tilts.length > 0 &&
-		tilts.some((t) => tiltWidthMultiplier(t, style, stroke.tool) > 1.01);
+		!!rawTilts &&
+		rawTilts.length > 0 &&
+		rawTilts.some((t) => tiltWidthMultiplier(t, style, stroke.tool) > 1.01);
 
-	if (hasTilt) {
+	const dense = stroke.shape
+		? { points: stroke.points, tilts: rawTilts }
+		: densifyPoints(stroke.points, Math.max(4, Math.min(8, stroke.size * 2.5)), hasTilt ? rawTilts : undefined);
+	const dPts = dense.points;
+	const tilts = dense.tilts;
+
+	if (hasTilt && tilts) {
 		const usePressure = stroke.tool === "pen" && (style === "notes" || style === "pencil" || style === "calligraphy");
-		const uniform = constantPressure(stroke.points);
-		const thinning = style === "calligraphy" ? 0.85 : style === "marker" ? 0.25 : 0.88;
+		const uniform = constantPressure(dPts);
+		// Keep thinning bounded so upright/fast segments never pinch to sub-pixel fragments.
+		const thinning = style === "calligraphy" ? 0.7 : style === "marker" ? 0.25 : 0.65;
 		const baseMul = style === "marker" ? 1.85 : style === "calligraphy" ? 1.4 : 1;
-		const factors = stroke.points.map((p, i) => {
-			const pFactor = usePressure && !uniform ? 1 + (style === "calligraphy" ? 0.85 : 0.6) * (2 * p[2] - 1) : 1;
+		const factors = dPts.map((p, i) => {
+			const pFactor = usePressure && !uniform ? 1 + (style === "calligraphy" ? 0.55 : 0.45) * (2 * Math.max(0.15, p[2]) - 1) : 1;
 			const tFactor = tiltWidthMultiplier(tilts[i] ?? 0, style, stroke.tool);
-			return pFactor * tFactor;
+			return Math.max(0.55, pFactor * tFactor);
 		});
 		let maxFactor = 1;
 		for (const f of factors) if (f > maxFactor) maxFactor = f;
 		const effSize = (stroke.size * baseMul * maxFactor) / (1 + thinning);
-		const pts = stroke.points.map((p, i) => {
+		const pts = dPts.map((p, i) => {
 			const norm = (factors[i] / maxFactor) * (1 + thinning);
-			const effP = Math.max(0, Math.min(1, 0.5 + (norm - 1) / (2 * thinning)));
+			const effP = Math.max(0.18, Math.min(1, 0.5 + (norm - 1) / (2 * thinning)));
 			return [p[0] + offsetX, p[1] + offsetY, effP];
 		});
-		const taper = usePressure ? stroke.size * (style === "pencil" ? 2 : style === "calligraphy" ? 5 : 4) : false;
+		const taper = usePressure ? stroke.size * (style === "pencil" ? 1.8 : style === "calligraphy" ? 3.5 : 3) : false;
 		return outlineToPath(
 			getStroke(pts, {
 				size: effSize,
 				thinning,
 				smoothing: 0.5,
-				streamline: 0.35,
+				streamline: 0.3,
 				simulatePressure: false,
 				last,
 				start: { cap: true, ...(taper ? { taper } : {}) },
@@ -149,7 +230,7 @@ export function strokeToPath(stroke: StrokeShape, opts: PathOptions = {}): strin
 		);
 	}
 
-	const pts = stroke.points.map((p) => [p[0] + offsetX, p[1] + offsetY, p[2]]);
+	const pts = dPts.map((p) => [p[0] + offsetX, p[1] + offsetY, Math.max(0.18, p[2])]);
 	if (stroke.tool === "highlighter") {
 		return outlineToPath(
 			getStroke(pts, {
@@ -170,7 +251,7 @@ export function strokeToPath(stroke: StrokeShape, opts: PathOptions = {}): strin
 				size: stroke.size * 1.9,
 				thinning: 0.14,
 				smoothing: 0.6,
-				streamline: 0.45,
+				streamline: 0.4,
 				simulatePressure: false,
 				last,
 				start: { cap: true, taper: stroke.size * 1.2 },
@@ -182,13 +263,13 @@ export function strokeToPath(stroke: StrokeShape, opts: PathOptions = {}): strin
 		return outlineToPath(
 			getStroke(pts, {
 				size: stroke.size * 1.45,
-				thinning: 0.85,
+				thinning: 0.72,
 				smoothing: 0.45,
-				streamline: 0.4,
+				streamline: 0.35,
 				simulatePressure: constantPressure(stroke.points),
 				last,
-				start: { cap: false, taper: stroke.size * 5 },
-				end: { cap: false, taper: stroke.size * 5 },
+				start: { cap: false, taper: stroke.size * 3.5 },
+				end: { cap: false, taper: stroke.size * 3.5 },
 			}),
 		);
 	}
@@ -196,13 +277,13 @@ export function strokeToPath(stroke: StrokeShape, opts: PathOptions = {}): strin
 		return outlineToPath(
 			getStroke(pts, {
 				size: stroke.size,
-				thinning: 0.55,
+				thinning: 0.5,
 				smoothing: 0.5,
-				streamline: 0.35,
+				streamline: 0.3,
 				simulatePressure: constantPressure(stroke.points),
 				last,
-				start: { cap: true, taper: stroke.size * 2 },
-				end: { cap: true, taper: stroke.size * 2 },
+				start: { cap: true, taper: stroke.size * 1.8 },
+				end: { cap: true, taper: stroke.size * 1.8 },
 			}),
 		);
 	}
@@ -210,13 +291,13 @@ export function strokeToPath(stroke: StrokeShape, opts: PathOptions = {}): strin
 	return outlineToPath(
 		getStroke(pts, {
 			size: stroke.size,
-			thinning: 0.6,
+			thinning: 0.55,
 			smoothing: 0.5,
-			streamline: 0.35,
+			streamline: 0.3,
 			simulatePressure: constantPressure(stroke.points),
 			last,
-			start: { cap: true, taper: stroke.size * 4 },
-			end: { cap: true, taper: stroke.size * 4 },
+			start: { cap: true, taper: stroke.size * 3 },
+			end: { cap: true, taper: stroke.size * 3 },
 		}),
 	);
 }

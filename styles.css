@@ -1,15 +1,97 @@
 /* ---------- Ink overlay ---------- */
 
-/* Room to draw or tap to type past the end of the note. */
+/* Room to draw or tap to type past the end of the note — always scrollable even on blank pages. */
+.markdown-source-view.mod-cm6 .cm-content.pencil-layer-content,
 .cm-content.pencil-layer-content {
-	min-height: 100% !important;
-	padding-bottom: 80vh !important;
+	min-height: 120vh !important;
+	padding-bottom: 120vh;
+}
+
+.pl-zoom-spacer {
+	position: absolute;
+	left: 0;
+	top: 0;
+	pointer-events: none;
+	visibility: hidden;
+}
+
+.pl-zoom-badge {
+	position: absolute;
+	right: 14px;
+	top: 52px;
+	z-index: 22;
+	padding: 6px 12px;
+	border-radius: 999px;
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	color: var(--text-normal);
+	background: color-mix(in srgb, var(--background-primary) 88%, transparent);
+	-webkit-backdrop-filter: blur(12px);
+	backdrop-filter: blur(12px);
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+	cursor: pointer;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.pl-math-bar {
+	position: absolute;
+	left: 50%;
+	top: 52px;
+	transform: translateX(-50%);
+	z-index: 24;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: min(520px, calc(100% - 24px));
+	padding: 6px 10px;
+	border-radius: 14px;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+}
+
+.pl-math-bar .pl-math-badge {
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	color: var(--interactive-accent);
+	white-space: nowrap;
+}
+
+.pl-math-bar .pl-math-status {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+.pl-math-bar .pl-math-input {
+	flex: 1 1 180px;
+	min-width: 110px;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-small);
+	padding: 4px 8px;
+	border-radius: 8px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-normal);
+}
+
+.pl-math-bar .pl-math-btn {
+	min-height: 32px;
+	padding: 0 10px;
+	white-space: nowrap;
+}
+
+.pl-zoom-target {
+	transform-origin: 0 0;
 }
 
 .pencil-layer-overlay {
 	position: absolute;
 	left: 0;
 	top: 0;
+	transform-origin: 0 0;
 	overflow: visible;
 	pointer-events: none;
 	z-index: 5;
@@ -583,22 +665,82 @@
 	opacity: 0.12;
 }
 
-/* Lasso loop and selection box (GoodNotes: dashed, accent colored). */
+/* Interactive Ruler / Geodreieck / Compass overlay. */
 .pencil-layer-overlay .pl-set-square {
-	fill: var(--interactive-accent);
-	fill-opacity: 0.14;
+	fill: var(--background-primary);
+	fill-opacity: 0.78;
 	stroke: var(--interactive-accent);
-	stroke-width: 1.5px;
+	stroke-width: 1.75px;
+	pointer-events: all;
+	cursor: move;
+	touch-action: none;
+}
+
+.pencil-layer-overlay .pl-guide-ticks {
+	fill: none;
+	stroke: var(--text-normal);
+	stroke-width: 1px;
+	opacity: 0.65;
+	pointer-events: none;
+}
+
+.pencil-layer-overlay .pl-guide-cm {
+	fill: var(--text-muted);
+	font-size: 9px;
+	font-family: var(--font-interface, sans-serif);
+	pointer-events: none;
+	user-select: none;
+}
+
+.pencil-layer-overlay .pl-guide-readout {
+	fill: var(--interactive-accent);
+	font-size: 12px;
+	font-weight: 700;
+	font-family: var(--font-interface, sans-serif);
+	pointer-events: none;
+	user-select: none;
 }
 
 .pencil-layer-overlay .pl-set-square-grip {
 	fill: var(--interactive-accent);
+	stroke: var(--background-primary);
+	stroke-width: 2px;
 	cursor: grab;
 	pointer-events: all;
 	touch-action: none;
 }
 
-.pencil-layer-overlay .pl-set-square-grip:active {
+.pencil-layer-overlay .pl-guide-rotate-grip {
+	fill: var(--background-primary);
+	stroke: var(--interactive-accent);
+	stroke-width: 2.5px;
+	cursor: grab;
+	pointer-events: all;
+	touch-action: none;
+}
+
+.pencil-layer-overlay .pl-guide-action {
+	cursor: pointer;
+	pointer-events: all;
+	touch-action: none;
+}
+
+.pencil-layer-overlay .pl-guide-action-bg {
+	fill: var(--background-primary);
+	stroke: var(--background-modifier-border);
+	stroke-width: 1.5px;
+}
+
+.pencil-layer-overlay .pl-guide-action-text {
+	fill: var(--text-normal);
+	font-size: 11px;
+	font-weight: 700;
+	font-family: var(--font-interface, sans-serif);
+	pointer-events: none;
+}
+
+.pencil-layer-overlay .pl-set-square-grip:active,
+.pencil-layer-overlay .pl-guide-rotate-grip:active {
 	cursor: grabbing;
 }
 
@@ -1539,19 +1681,166 @@ body.theme-light {
 	pointer-events: none;
 }
 .pencil-layer-overlay .pl-guide-line {
-	stroke: var(--text-faint, #888);
-	stroke-width: 1;
-	stroke-dasharray: 6 5;
-	opacity: 0.48;
+	stroke: var(--interactive-accent, #7c6cf6);
+	stroke-width: 1.25;
+	stroke-dasharray: 7 5;
+	opacity: 0.55;
 	shape-rendering: crispEdges;
 }
+.pencil-layer-overlay .pl-guide-margin {
+	stroke-dasharray: 4 4;
+	opacity: 0.45;
+}
 .pencil-layer-overlay .pl-guide-overflow {
-	fill: var(--background-modifier-hover, rgba(128, 128, 128, 0.08));
-	opacity: 0.55;
+	fill: var(--text-normal, #888);
+	opacity: 0.04;
 }
 .pencil-layer-overlay .pl-guide-label {
 	fill: var(--text-muted, #888);
 	font-size: 11px;
+	font-weight: 600;
 	font-family: var(--font-interface, sans-serif);
-	opacity: 0.72;
+	opacity: 0.85;
+}
+
+/* ---------- Gemini AI Assistant modal ---------- */
+.pl-ai-modal {
+	width: min(680px, 95vw);
+	max-width: 95vw;
+}
+.pl-ai-modal .pl-ai-topbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+.pl-ai-modal .pl-ai-model {
+	flex: 1 1 200px;
+}
+.pl-ai-modal .pl-ai-pro-btn {
+	white-space: nowrap;
+}
+.pl-ai-modal .pl-ai-key-box {
+	padding: 10px 12px;
+	margin-bottom: 10px;
+	border-radius: 10px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+}
+.pl-ai-modal .pl-ai-info {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	line-height: 1.45;
+	margin-bottom: 8px;
+}
+.pl-ai-modal .pl-ai-key-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+.pl-ai-modal .pl-ai-key-input {
+	flex: 1 1 200px;
+}
+.pl-ai-modal .pl-ai-key-link {
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}
+.pl-ai-modal .pl-ai-attachment {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 10px;
+	margin-bottom: 8px;
+	border-radius: 10px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+}
+.pl-ai-modal .pl-ai-attachment-img {
+	max-height: 64px;
+	max-width: 140px;
+	border-radius: 6px;
+	background: #ffffff;
+	border: 1px solid var(--background-modifier-border);
+}
+.pl-ai-modal .pl-ai-attachment-label {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.pl-ai-modal .pl-ai-ctx-toggle {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	cursor: pointer;
+}
+.pl-ai-modal .pl-ai-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-bottom: 10px;
+}
+.pl-ai-modal .pl-ai-chip {
+	font-size: var(--font-ui-smaller);
+	min-height: 30px;
+	padding: 0 10px;
+	border-radius: 999px;
+}
+.pl-ai-modal .pl-ai-thread {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	max-height: 44vh;
+	overflow-y: auto;
+	margin-bottom: 10px;
+	padding-right: 4px;
+}
+.pl-ai-modal .pl-ai-msg {
+	padding: 10px 12px;
+	border-radius: 12px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+}
+.pl-ai-modal .pl-ai-msg.is-user {
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-secondary));
+}
+.pl-ai-modal .pl-ai-msg-role {
+	font-size: var(--font-ui-smaller);
+	font-weight: 700;
+	color: var(--text-muted);
+	margin-bottom: 4px;
+}
+.pl-ai-modal .pl-ai-msg-body {
+	white-space: pre-wrap;
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+	user-select: text;
+	-webkit-user-select: text;
+}
+.pl-ai-modal .pl-ai-msg-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 8px;
+}
+.pl-ai-modal .pl-ai-status {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin-bottom: 8px;
+}
+.pl-ai-modal .pl-ai-composer {
+	display: flex;
+	gap: 8px;
+	align-items: flex-end;
+}
+.pl-ai-modal .pl-ai-input {
+	flex: 1 1 auto;
+	resize: vertical;
+	min-height: 48px;
+}
+.pl-ai-modal .pl-ai-send {
+	min-height: 44px;
+	padding: 0 16px;
 }

@@ -23,9 +23,23 @@ import { Notice, Platform, editorInfoField, setIcon, setTooltip } from "obsidian
 import { InkFile, PenStyle, Point, Stroke, Tool, hashLine, isEmptyInk, newId, resolveAnchor } from "./model";
 import { BBox, bbox, dashArray, hitTestStrokeSegment, isCenterline, isDashed, strokeToPath } from "./geometry";
 import { formatLatexFormula } from "./mathLatex";
-import { recognizeMathStrokes } from "./mathVision";
-import { buildPageGuideLayout } from "./pageGuides";
+import { recognizeMathStrokes, strokesToPngBase64 } from "./mathVision";
+import { buildPageGuideLayout, computeCanvasBottomPadding } from "./pageGuides";
 import { TapLineInfo, insertionPosForY, planTapToType } from "./tapToType";
+import type { AssistantLaunchOptions } from "./aiAssistant";
+import {
+	PinchActivation,
+	ZOOM_MAX,
+	ZOOM_MIN,
+	ZOOM_STEP,
+	clampZoom,
+	distanceBetween,
+	formatZoomPercent,
+	midpoint,
+	pinchScale,
+	scrollForZoomAnchor,
+	wheelZoomFactor,
+} from "./zoom";
 import {
 	CurveBuilder,
 	DASH_MIN_DISTANCE,
@@ -54,7 +68,23 @@ import { TiltSample, isPenEraser, pointerTilt, resampleTilts, tiltWidthMultiplie
 import type { PencilGestureAction } from "./pencilGestures";
 import { blockStylusTouch, onTap } from "./tap";
 import { DrawShape, ShapeSpec, XY, adjustShape, draggedShape, recognizeShape, shapeToPoints } from "./shapes";
-import { CompassDrag, GuideEdge, compassShape, moveCompass, nearestGuideEdge, projectToEdge, setSquareEdges, startCompassDrag } from "./geometryGuide";
+import {
+	CompassDrag,
+	GuideEdge,
+	PX_PER_CM,
+	PX_PER_MM,
+	RULER_HALF_LENGTH,
+	RULER_HALF_THICKNESS,
+	compassShape,
+	moveCompass,
+	nearestGuideEdge,
+	projectToEdge,
+	rulerGeometry,
+	setSquareEdges,
+	snapGuideAngle,
+	startCompassDrag,
+	twoFingerGuideTransform,
+} from "./geometryGuide";
 import {
 	RecentInk,
 	ScribbleTarget,
@@ -126,6 +156,10 @@ export interface InkHost {
 	inkSelectionChanged(): void;
 	/** A pen touched a note (desktop: from now on this device gets the full drawing toolbar). */
 	penSeen(): void;
+	/** Optional settings patch callback (used by on-canvas ruler/guide handles). */
+	updateSettings?(patch: Partial<InkSettings>): void;
+	/** Optional Gemini AI assistant opener (launched from lasso menu or toolbar). */
+	openAssistant?(opts: AssistantLaunchOptions): void;
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -183,6 +217,12 @@ function paint(el: SVGPathElement, s: Pick<Stroke, "tool" | "style" | "size" | "
 		el.setAttribute("stroke-linejoin", "round");
 		const dash = dashArray(s);
 		if (dash) el.setAttribute("stroke-dasharray", dash);
+		else el.removeAttribute?.("stroke-dasharray");
+	} else {
+		el.removeAttribute?.("stroke-width");
+		el.removeAttribute?.("stroke-linecap");
+		el.removeAttribute?.("stroke-linejoin");
+		el.removeAttribute?.("stroke-dasharray");
 	}
 }
 
@@ -409,10 +449,33 @@ export class InkView implements PluginValue {
 	private recentInk: RecentInk[] = [];
 	/** Eraser position while erasing. */
 	private readonly eraserCursor: SVGCircleElement;
+	private readonly gGuideUi: SVGGElement;
 	private readonly guideOutline: SVGPathElement;
+	private readonly guideTicks: SVGPathElement;
+	private readonly guideLabels: SVGGElement;
 	private readonly guideGrip: SVGCircleElement;
+	private readonly guideRotateGrip: SVGCircleElement;
+	private readonly guideResetBtn: SVGGElement;
+	private readonly guideCloseBtn: SVGGElement;
 	private guideOrigin: XY | null = null;
-	private guideDrag: { id: number; offset: XY } | null = null;
+	private guideDrag:
+		| { mode: "move"; id: number; offset: XY }
+		| { mode: "rotate"; id: number; startAngle: number; startPointerAngle: number }
+		| { mode: "radius"; id: number }
+		| null = null;
+	private readonly guideTouches = new Map<number, XY>();
+	private guidePinchStart: { origin: XY; angle: number; radius: number; a: XY; b: XY; idA: number; idB: number } | null = null;
+	/** Dynamic extra blank pages so empty/short notes can always be scrolled down cleanly. */
+	private extraPages = 2;
+	private lastBottomPad = -1;
+	/** Page pinch-to-zoom state (`1` = 100%). */
+	private zoom = 1;
+	private zoomSpacer: HTMLElement | null = null;
+	private zoomBadge: HTMLElement | null = null;
+	private pinch: { activation: PinchActivation; startZoom: number; prevMid: { x: number; y: number }; lastZoom: number } | null = null;
+	/** Floating Formula preview/edit bar (keeps handwritten strokes safe until confirmed). */
+	private mathBarEl: HTMLElement | null = null;
+	private pendingMath: { path: string; strokeIds: string[]; rawTex: string; midY: number; box: BBox } | null = null;
 
 	/** Lasso selection (strokes on the canvas) and the live drag transform. */
 	private selection: Stroke[] | null = null;
@@ -457,16 +520,42 @@ export class InkView implements PluginValue {
 		this.selHandle.classList.add("pl-hidden");
 		this.eraserCursor = svgEl("circle", "pl-eraser-cursor");
 		this.eraserCursor.classList.add("pl-hidden");
-		this.guideOutline = svgEl("path", "pl-set-square pl-hidden");
-		this.guideGrip = svgEl("circle", "pl-set-square-grip pl-hidden");
+		this.gGuideUi = svgEl("g", "pl-guide-tool pl-hidden");
+		this.guideOutline = svgEl("path", "pl-set-square");
+		this.guideTicks = svgEl("path", "pl-guide-ticks");
+		this.guideLabels = svgEl("g", "pl-guide-labels");
+		this.guideGrip = svgEl("circle", "pl-set-square-grip");
 		this.guideGrip.setAttribute("r", "14");
-		this.guideGrip.setAttribute("aria-label", "Move set square");
-		this.guideGrip.addEventListener("pointerdown", this.onGuideDown);
-		this.guideGrip.addEventListener("pointermove", this.onGuideMove);
-		for (const event of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
-			this.guideGrip.addEventListener(event, this.onGuideEnd);
+		this.guideGrip.setAttribute("aria-label", "Move guide");
+		this.guideRotateGrip = svgEl("circle", "pl-guide-rotate-grip");
+		this.guideRotateGrip.setAttribute("r", "13");
+		this.guideRotateGrip.setAttribute("aria-label", "Rotate or resize guide");
+		this.guideResetBtn = svgEl("g", "pl-guide-action pl-guide-reset");
+		this.guideCloseBtn = svgEl("g", "pl-guide-action pl-guide-close");
+		for (const el of [this.guideOutline, this.guideGrip]) {
+			el.addEventListener("pointerdown", this.onGuideDown);
+			el.addEventListener("pointermove", this.onGuideMove);
+			for (const event of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
+				el.addEventListener(event, this.onGuideEnd);
+			}
 		}
-		this.gUi.append(this.guideOutline, this.guideGrip, this.selRect, this.selHandle, this.eraserCursor);
+		this.guideRotateGrip.addEventListener("pointerdown", this.onGuideRotateDown);
+		this.guideRotateGrip.addEventListener("pointermove", this.onGuideMove);
+		for (const event of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
+			this.guideRotateGrip.addEventListener(event, this.onGuideEnd);
+		}
+		this.guideResetBtn.addEventListener("pointerdown", this.onGuideResetDown);
+		this.guideCloseBtn.addEventListener("pointerdown", this.onGuideCloseDown);
+		this.gGuideUi.append(
+			this.guideOutline,
+			this.guideTicks,
+			this.guideLabels,
+			this.guideGrip,
+			this.guideRotateGrip,
+			this.guideResetBtn,
+			this.guideCloseBtn,
+		);
+		this.gUi.append(this.gGuideUi, this.selRect, this.selHandle, this.eraserCursor);
 		this.svg.append(this.gGuides, this.gHl, this.gHlLive, this.gPen, this.gPenLive, this.gUi);
 		view.scrollDOM.appendChild(this.svg);
 
@@ -483,6 +572,7 @@ export class InkView implements PluginValue {
 		sd.addEventListener("touchmove", this.onTouch, capActive);
 		sd.addEventListener("touchend", this.onTouch, capActive);
 		sd.addEventListener("touchcancel", this.onTouch, capActive);
+		sd.addEventListener("wheel", this.onWheel, capActive);
 		sd.addEventListener("click", this.onEditorClick);
 		for (const t of SUPPRESSED) sd.addEventListener(t, this.onCompatMouse, capActive);
 
@@ -546,9 +636,12 @@ export class InkView implements PluginValue {
 		sd.removeEventListener("touchmove", this.onTouch, true);
 		sd.removeEventListener("touchend", this.onTouch, true);
 		sd.removeEventListener("touchcancel", this.onTouch, true);
+		sd.removeEventListener("wheel", this.onWheel, true);
 		sd.removeEventListener("click", this.onEditorClick);
 		for (const t of SUPPRESSED) sd.removeEventListener(t, this.onCompatMouse, true);
 		this.clearMathBuffer();
+		this.clearMathBar();
+		this.resetZoomDom();
 		if (this.raf) window.cancelAnimationFrame(this.raf);
 		if (this.switchTimer !== null) window.clearTimeout(this.switchTimer);
 		this.cancelActive();
@@ -556,6 +649,10 @@ export class InkView implements PluginValue {
 		this.svg.remove();
 		this.menuEl?.remove();
 		this.menuEl = null;
+		this.zoomSpacer?.remove();
+		this.zoomSpacer = null;
+		this.zoomBadge?.remove();
+		this.zoomBadge = null;
 		this.view.scrollDOM.classList.remove("pl-mouse-draws", "pl-desk-select");
 		if (this.hoverRaf) window.cancelAnimationFrame(this.hoverRaf);
 		this.setHoverCursor("");
@@ -614,6 +711,9 @@ export class InkView implements PluginValue {
 
 	private attach(path: string | null): void {
 		this.path = path;
+		this.extraPages = 2;
+		this.lastBottomPad = -1;
+		this.pageGuideKey = "";
 		const token = ++this.attachToken;
 		if (!path || path === this.deadPath) {
 			this.path = null;
@@ -629,6 +729,7 @@ export class InkView implements PluginValue {
 			},
 			(err) => console.error("[pencil-layer] load failed", err),
 		);
+		this.scheduleRender();
 	}
 
 	/** `anchorDoc`: the document the current positions refer to (defaults to the current one). */
@@ -803,34 +904,92 @@ export class InkView implements PluginValue {
 				this.textHl.measure(ink?.strokes);
 				this.charA.measure(ink?.strokes); // [Stage H] characters of char-anchored ink (stale ones only)
 				const geo = this.readGeometry(view);
-				const { setSquare, compass } = this.host.getSettings();
-				if (!setSquare && !compass) this.guideOrigin = null;
+				const { ruler, setSquare, compass } = this.host.getSettings();
+				if (!ruler && !setSquare && !compass) this.guideOrigin = null;
 				else if (!this.guideOrigin) {
 					const scroller = view.scrollDOM;
-					this.guideOrigin = [geo.width / 2, Math.max(0, scroller.scrollTop - geo.top) + Math.min(140, scroller.clientHeight / 3)];
+					const z = this.zoom || 1;
+					const visTop = Math.max(0, (scroller.scrollTop - geo.top) / z);
+					const visH = (scroller.clientHeight || 600) / z;
+					this.guideOrigin = [Math.max(120, geo.width / 2), visTop + Math.min(180, visH / 3)];
 				}
 				return { geo };
 			},
 			write: ({ geo }: { geo: Geometry }) => {
+				this.syncCanvasRoom();
 				this.render(geo);
 				this.renderGuide();
+				this.updateZoomSpacer();
 			},
 		});
+	}
+
+	/** Add one more blank page height at the bottom of the editor canvas so you can keep scrolling. */
+	addBlankPage(): void {
+		this.extraPages = Math.min(40, this.extraPages + 1);
+		this.syncCanvasRoom();
+		this.scheduleRender();
+	}
+
+	/** Ensure `.cm-content` always has generous bottom padding so blank/short notes scroll cleanly. */
+	private syncCanvasRoom(): void {
+		const cd = this.view.contentDOM;
+		if (!cd || !cd.style) return;
+		const sd = this.view.scrollDOM;
+		const s = this.host.getSettings();
+		let lowestInkY = 0;
+		const ink = this.path ? this.store.get(this.path) : undefined;
+		if (ink && ink.strokes.length > 0) {
+			for (const st of ink.strokes) {
+				if (st.text) continue;
+				const top = this.place(st)[1];
+				const b = shapeOf(st).box;
+				if (top + b.maxY > lowestInkY) lowestInkY = top + b.maxY;
+			}
+		}
+		const docH = this.view.contentHeight ?? 0;
+		const pad = computeCanvasBottomPadding({
+			format: s.pageGuide,
+			docHeight: docH,
+			viewportHeight: sd.clientHeight || 900,
+			lowestInkY,
+			extraPages: this.extraPages,
+		});
+		if (Math.abs(pad - this.lastBottomPad) >= 8) {
+			this.lastBottomPad = pad;
+			cd.style.paddingBottom = `${pad}px`;
+		}
+	}
+
+	private effectiveScaleX(): number {
+		return this.zoom !== 1 ? this.zoom : this.view.scaleX || 1;
+	}
+
+	private effectiveScaleY(): number {
+		return this.zoom !== 1 ? this.zoom : this.view.scaleY || 1;
 	}
 
 	private readGeometry(view: EditorView): Geometry {
 		const sd = view.scrollDOM;
 		const cd = view.contentDOM;
-		const sx = view.scaleX || 1;
-		const sy = view.scaleY || 1;
+		const sx = this.effectiveScaleX();
+		const sy = this.effectiveScaleY();
 		const sRect = sd.getBoundingClientRect();
 		const cRect = cd.getBoundingClientRect();
 		const cs = getComputedStyle(cd);
 		const padL = parseFloat(cs.paddingLeft) || 0;
 		const padR = parseFloat(cs.paddingRight) || 0;
+		const docTop = view.documentTop;
+		if (this.zoom !== 1) {
+			return {
+				left: cRect.left - sRect.left + sd.scrollLeft + padL * sx,
+				top: docTop - sRect.top + sd.scrollTop,
+				width: Math.max(0, cd.clientWidth - padL - padR),
+				height: Math.max(0, (cRect.bottom - docTop) / sy),
+			};
+		}
 		const baseLeft = sRect.left - sd.scrollLeft * sx;
 		const baseTop = sRect.top - sd.scrollTop * sy;
-		const docTop = view.documentTop;
 		return {
 			left: (cRect.left - baseLeft) / sx + padL,
 			top: (docTop - baseTop) / sy,
@@ -962,123 +1121,524 @@ export class InkView implements PluginValue {
 		return e.pointerType === "mouse" && e.button === 0 && this.host.getSettings().mouseDraws;
 	}
 
-	/** Events on the context menu are left to its own handlers. */
+	/** Events on the context menu, math bar, zoom badge, or ruler/guide controls are left to their own handlers. */
 	private isUiTarget(target: EventTarget | null): boolean {
-		if (target === this.guideGrip) return true;
-		return !!this.menuEl && target instanceof Node && this.menuEl.contains(target);
+		if (
+			target === this.guideGrip ||
+			target === this.guideRotateGrip ||
+			target === this.guideOutline ||
+			target === this.guideResetBtn ||
+			target === this.guideCloseBtn
+		) {
+			return true;
+		}
+		if (typeof Node !== "undefined" && target instanceof Node) {
+			if (this.gGuideUi.contains?.(target)) return true;
+			if (this.menuEl && this.menuEl.contains(target)) return true;
+			if (this.mathBarEl && this.mathBarEl.contains(target)) return true;
+			if (this.zoomBadge && this.zoomBadge.contains(target)) return true;
+		}
+		return false;
+	}
+
+	// -------------------------------------------------------------------------------------------
+	// Pinch-to-zoom & page zoom controls
+	// -------------------------------------------------------------------------------------------
+
+	getZoom(): number {
+		return this.zoom;
+	}
+
+	zoomBy(factor: number): void {
+		const sd = this.view.scrollDOM;
+		const r = sd.getBoundingClientRect();
+		const focal = { x: r.left + (sd.clientWidth || 400) / 2, y: r.top + (sd.clientHeight || 400) / 2 };
+		this.setZoom(this.zoom * factor, focal);
+	}
+
+	zoomIn(): void {
+		this.zoomBy(1 + ZOOM_STEP);
+	}
+
+	zoomOut(): void {
+		this.zoomBy(1 / (1 + ZOOM_STEP));
+	}
+
+	resetZoom(): void {
+		this.setZoom(1);
+	}
+
+	setZoom(nextZoom: number, focalClient?: { x: number; y: number }, prevFocalClient?: { x: number; y: number }): void {
+		const target = clampZoom(nextZoom, ZOOM_MIN, ZOOM_MAX);
+		const prev = this.zoom;
+		const sd = this.view.scrollDOM;
+		const sRect = sd.getBoundingClientRect();
+		const oldScrollLeft = sd.scrollLeft;
+		const oldScrollTop = sd.scrollTop;
+		this.zoom = target;
+		this.applyZoomDom();
+		if (focalClient && prev > 0) {
+			const ratio = target / prev;
+			const fx0 = (prevFocalClient?.x ?? focalClient.x) - sRect.left;
+			const fy0 = (prevFocalClient?.y ?? focalClient.y) - sRect.top;
+			const fx1 = focalClient.x - sRect.left;
+			const fy1 = focalClient.y - sRect.top;
+			sd.scrollLeft = scrollForZoomAnchor(oldScrollLeft, fx0, ratio, fx1);
+			sd.scrollTop = scrollForZoomAnchor(oldScrollTop, fy0, ratio, fy1);
+		}
+		this.applyGeometry(this.readGeometry(this.view));
+		this.renderSelection();
+		this.updateZoomBadge();
+		if (Math.abs(target - prev) > 1e-4) this.scheduleRender();
+	}
+
+	private zoomTargetEl(): HTMLElement | null {
+		const sd = this.view.scrollDOM;
+		const children = sd.children ? Array.from(sd.children) : [];
+		for (const c of children) {
+			if (c.classList?.contains("cm-sizer")) return c as HTMLElement;
+		}
+		return null;
+	}
+
+	private applyZoomDom(): void {
+		const z = this.zoom;
+		const sizer = this.zoomTargetEl();
+		if (sizer) {
+			sizer.classList.toggle("pl-zoom-target", z !== 1);
+			sizer.setCssProps({ transform: z === 1 ? "" : `scale(${z})` });
+		}
+		this.svg.setCssProps({ transform: z === 1 ? "" : `scale(${z})` });
+		this.updateZoomSpacer();
+	}
+
+	private resetZoomDom(): void {
+		this.zoom = 1;
+		const sizer = this.zoomTargetEl();
+		if (sizer) {
+			sizer.classList.remove("pl-zoom-target");
+			sizer.setCssProps({ transform: "" });
+		}
+		this.svg.setCssProps({ transform: "" });
+	}
+
+	private updateZoomSpacer(): void {
+		const sd = this.view.scrollDOM;
+		if (this.zoom === 1) {
+			this.zoomSpacer?.remove();
+			this.zoomSpacer = null;
+			return;
+		}
+		const sizer = this.zoomTargetEl();
+		if (!sizer || typeof sd.createDiv !== "function") return;
+		if (!this.zoomSpacer || !this.zoomSpacer.isConnected) {
+			this.zoomSpacer = sd.createDiv({ cls: "pl-zoom-spacer", attr: { "aria-hidden": "true" } });
+		}
+		const w = Math.ceil(Math.max(sizer.offsetWidth, (this.geo?.width ?? 0) + 80) * this.zoom);
+		const h = Math.ceil(Math.max(sizer.offsetHeight, (this.geo?.height ?? 0) + 120) * this.zoom);
+		this.zoomSpacer.style.width = `${w}px`;
+		this.zoomSpacer.style.height = `${h}px`;
+	}
+
+	private updateZoomBadge(): void {
+		if (Math.abs(this.zoom - 1) < 0.005) {
+			this.zoomBadge?.remove();
+			this.zoomBadge = null;
+			return;
+		}
+		const leaf = this.view.scrollDOM.closest?.<HTMLElement>(".workspace-leaf-content") ?? null;
+		if (!leaf || typeof leaf.createDiv !== "function") return;
+		if (!this.zoomBadge || !this.zoomBadge.isConnected) {
+			const b = leaf.createDiv({ cls: "pl-zoom-badge", attr: { role: "button", "aria-label": "Zoom auf 100% zurücksetzen" } });
+			b.addEventListener("pointerdown", (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+			});
+			blockStylusTouch(b);
+			onTap(b, () => this.resetZoom());
+			this.zoomBadge = b;
+		}
+		this.zoomBadge.setText(`${formatZoomPercent(this.zoom)} · ↺`);
+	}
+
+	private readonly onWheel = (e: WheelEvent): void => {
+		if (!e.ctrlKey && !e.metaKey) return;
+		if (this.isUiTarget(e.target)) return;
+		e.preventDefault();
+		e.stopPropagation();
+		this.setZoom(this.zoom * wheelZoomFactor(e.deltaY), { x: e.clientX, y: e.clientY });
+	};
+
+	// -------------------------------------------------------------------------------------------
+	// Drawing guides (Straight ruler, Set square, Compass) + Page boundaries
+	// -------------------------------------------------------------------------------------------
+
+	private guideHalfSize(): number {
+		return Math.max(90, Math.min(180, (this.geo?.width ?? 480) * 0.36));
 	}
 
 	private guideEdges(): GuideEdge[] {
 		const settings = this.host.getSettings();
-		if (!this.guideOrigin || !settings.setSquare) return [];
-		return setSquareEdges(this.guideOrigin, settings.setSquareAngle, Math.max(30, Math.min(135, (this.geo?.width ?? 0) / 3)));
+		if (!this.guideOrigin) return [];
+		if (settings.ruler) return rulerGeometry(this.guideOrigin, settings.rulerAngle, RULER_HALF_LENGTH, RULER_HALF_THICKNESS).edges;
+		if (settings.setSquare) return setSquareEdges(this.guideOrigin, settings.setSquareAngle, this.guideHalfSize());
+		return [];
 	}
 
 	private renderPageGuides(geo: Geometry): void {
 		const fmt = this.host.getSettings().pageGuide;
-		const key = `${fmt}:${Math.round(geo.width)}x${Math.round(geo.height)}`;
+		const sd = this.view.scrollDOM;
+		const visW = Math.round(((sd.clientWidth || geo.width) / (this.zoom || 1)));
+		const leftMargin = Math.max(0, Math.round(geo.left / (this.zoom || 1)));
+		const key = `${fmt}:${Math.round(geo.width)}x${Math.round(geo.height)}:${visW}:${leftMargin}`;
 		if (key === this.pageGuideKey) return;
 		this.pageGuideKey = key;
 		this.gGuides.replaceChildren();
-		const layout = buildPageGuideLayout(fmt, geo.width, geo.height);
+		const layout = buildPageGuideLayout(fmt, geo.width, geo.height, Math.max(200, visW - leftMargin));
 		if (!layout) return;
-		const totalH = Math.max(geo.height, layout.horizontalBreaks[layout.horizontalBreaks.length - 1] ?? layout.metrics.height);
+		const totalH = layout.totalHeight;
+		const sheetW = layout.sheetWidth;
 
-		if (layout.overflowX !== null && layout.overflowWidth > 0) {
+		// Subtle outer margin shading on the left & right of the printable sheet so the A4/A3 sheet stands out clearly.
+		if (leftMargin > 4) {
+			const leftShade = svgEl("rect", "pl-guide-overflow");
+			leftShade.setAttribute("x", String(-leftMargin));
+			leftShade.setAttribute("y", "0");
+			leftShade.setAttribute("width", String(leftMargin));
+			leftShade.setAttribute("height", String(totalH));
+			this.gGuides.appendChild(leftShade);
+		}
+		const rightShadeW = Math.max(layout.overflowWidth, visW - leftMargin - sheetW);
+		if (rightShadeW > 2) {
 			const shade = svgEl("rect", "pl-guide-overflow");
-			shade.setAttribute("x", String(layout.overflowX));
+			shade.setAttribute("x", String(sheetW));
 			shade.setAttribute("y", "0");
-			shade.setAttribute("width", String(layout.overflowWidth));
+			shade.setAttribute("width", String(rightShadeW));
 			shade.setAttribute("height", String(totalH));
 			this.gGuides.appendChild(shade);
 		}
-		const margin = svgEl("line", "pl-guide-line pl-guide-margin");
-		margin.setAttribute("x1", String(layout.metrics.width));
-		margin.setAttribute("y1", "0");
-		margin.setAttribute("x2", String(layout.metrics.width));
-		margin.setAttribute("y2", String(totalH));
-		this.gGuides.appendChild(margin);
+
+		// Complete sheet side borders (LEFT + RIGHT + TOP) so boundaries are always visible on every note & format.
+		const addLine = (cls: string, x1: number, y1: number, x2: number, y2: number) => {
+			const l = svgEl("line", cls);
+			l.setAttribute("x1", String(x1));
+			l.setAttribute("y1", String(y1));
+			l.setAttribute("x2", String(x2));
+			l.setAttribute("y2", String(y2));
+			this.gGuides.appendChild(l);
+		};
+		addLine("pl-guide-line pl-guide-margin", 0, 0, 0, totalH);
+		addLine("pl-guide-line pl-guide-margin", sheetW, 0, sheetW, totalH);
+		addLine("pl-guide-line pl-guide-break", 0, 0, sheetW, 0);
+
+		// Page 1 header badge (always visible near the top-left of the sheet).
+		const topLabel = svgEl("text", "pl-guide-label");
+		topLabel.setAttribute("x", "8");
+		topLabel.setAttribute("y", "14");
+		topLabel.textContent = `${layout.metrics.label} · Seite 1`;
+		this.gGuides.appendChild(topLabel);
 
 		layout.horizontalBreaks.forEach((y, idx) => {
-			const line = svgEl("line", "pl-guide-line pl-guide-break");
-			line.setAttribute("x1", "0");
-			line.setAttribute("y1", String(y));
-			line.setAttribute("x2", String(layout.guideWidth));
-			line.setAttribute("y2", String(y));
-			this.gGuides.appendChild(line);
+			addLine("pl-guide-line pl-guide-break", 0, y, sheetW, y);
 
 			const label = svgEl("text", "pl-guide-label");
-			label.setAttribute("x", String(Math.max(8, layout.guideWidth - 6)));
-			label.setAttribute("y", String(Math.max(12, y - 5)));
+			label.setAttribute("x", String(layout.labelRightX));
+			label.setAttribute("y", String(Math.max(14, y - 6)));
 			label.setAttribute("text-anchor", "end");
-			label.textContent = `${layout.metrics.label} · Seite ${idx + 1} / ${idx + 2}`;
+			label.textContent = `${layout.metrics.label} · Ende Seite ${idx + 1}`;
 			this.gGuides.appendChild(label);
+
+			const nextLabel = svgEl("text", "pl-guide-label");
+			nextLabel.setAttribute("x", "8");
+			nextLabel.setAttribute("y", String(y + 15));
+			nextLabel.textContent = `${layout.metrics.label} · Seite ${idx + 2}`;
+			this.gGuides.appendChild(nextLabel);
 		});
 	}
 
 	private renderGuide(): void {
 		const origin = this.guideOrigin;
 		const settings = this.host.getSettings();
-		const edges = this.guideEdges();
-		const shown = !!this.path && !!origin && (settings.compass || edges.length > 0);
-		this.guideOutline.classList.toggle("pl-hidden", !shown);
-		this.guideGrip.classList.toggle("pl-hidden", !shown);
+		const activeKind = settings.compass ? "compass" : settings.ruler ? "ruler" : settings.setSquare ? "setSquare" : "none";
+		const shown = !!this.path && !!origin && activeKind !== "none";
+		this.gGuideUi.classList.toggle("pl-hidden", !shown);
 		if (!shown || !origin) return;
-		if (settings.compass) {
+
+		this.guideLabels.replaceChildren();
+		this.guideResetBtn.replaceChildren();
+		this.guideCloseBtn.replaceChildren();
+
+		const addActionBtn = (parent: SVGGElement, cx: number, cy: number, text: string, label: string) => {
+			parent.setAttribute("aria-label", label);
+			const bg = svgEl("circle", "pl-guide-action-bg");
+			bg.setAttribute("cx", String(cx));
+			bg.setAttribute("cy", String(cy));
+			bg.setAttribute("r", "13");
+			const t = svgEl("text", "pl-guide-action-text");
+			t.setAttribute("x", String(cx));
+			t.setAttribute("y", String(cy + 4));
+			t.setAttribute("text-anchor", "middle");
+			t.textContent = text;
+			parent.append(bg, t);
+		};
+
+		if (activeKind === "compass") {
 			const [x, y] = origin;
 			const r = settings.compassRadius;
 			this.guideOutline.setAttribute("d", `M ${x - r} ${y} a ${r} ${r} 0 0 1 ${2 * r} 0 a ${r} ${r} 0 0 1 ${-2 * r} 0 Z M ${x} ${y} h ${r}`);
+			let ticks = "";
+			for (let i = 0; i < 24; i++) {
+				const a = (i * Math.PI) / 12;
+				const len = i % 6 === 0 ? 10 : 5;
+				ticks += ` M ${(x + Math.cos(a) * (r - len)).toFixed(1)} ${(y + Math.sin(a) * (r - len)).toFixed(1)} L ${(x + Math.cos(a) * r).toFixed(1)} ${(y + Math.sin(a) * r).toFixed(1)}`;
+			}
+			this.guideTicks.setAttribute("d", ticks);
 			this.guideGrip.setAttribute("cx", String(x));
 			this.guideGrip.setAttribute("cy", String(y));
+			this.guideRotateGrip.setAttribute("cx", String(x + r));
+			this.guideRotateGrip.setAttribute("cy", String(y));
+			const cm = (r / PX_PER_CM).toFixed(1);
+			const badge = svgEl("text", "pl-guide-readout");
+			badge.setAttribute("x", String(x));
+			badge.setAttribute("y", String(y - 18));
+			badge.setAttribute("text-anchor", "middle");
+			badge.textContent = `r = ${cm} cm`;
+			this.guideLabels.appendChild(badge);
+			addActionBtn(this.guideResetBtn, x - 26, y - r - 18, "R", "Standard-Radius");
+			addActionBtn(this.guideCloseBtn, x + 26, y - r - 18, "×", "Zirkel schließen");
 			return;
 		}
+
+		if (activeKind === "ruler") {
+			const geom = rulerGeometry(origin, settings.rulerAngle, RULER_HALF_LENGTH, RULER_HALF_THICKNESS);
+			const [tl, tr, br, bl] = geom.corners;
+			const rad = (settings.rulerAngle * Math.PI) / 180;
+			const cos = Math.cos(rad);
+			const sin = Math.sin(rad);
+			const pt = (lx: number, ly: number): XY => [origin[0] + lx * cos - ly * sin, origin[1] + lx * sin + ly * cos];
+
+			this.guideOutline.setAttribute(
+				"d",
+				`M ${tl[0].toFixed(1)} ${tl[1].toFixed(1)} L ${tr[0].toFixed(1)} ${tr[1].toFixed(1)} L ${br[0].toFixed(1)} ${br[1].toFixed(1)} L ${bl[0].toFixed(1)} ${bl[1].toFixed(1)} Z`,
+			);
+
+			const totalPx = RULER_HALF_LENGTH * 2 - 28;
+			const totalMm = Math.floor(totalPx / PX_PER_MM);
+			let ticks = "";
+			for (let mm = 0; mm <= totalMm; mm++) {
+				const lx = -RULER_HALF_LENGTH + 14 + mm * PX_PER_MM;
+				const len = mm % 10 === 0 ? 13 : mm % 5 === 0 ? 9 : 5;
+				const p0 = pt(lx, -RULER_HALF_THICKNESS);
+				const p1 = pt(lx, -RULER_HALF_THICKNESS + len);
+				const q0 = pt(lx, RULER_HALF_THICKNESS);
+				const q1 = pt(lx, RULER_HALF_THICKNESS - (mm % 10 === 0 ? 8 : 4));
+				ticks += ` M ${p0[0].toFixed(1)} ${p0[1].toFixed(1)} L ${p1[0].toFixed(1)} ${p1[1].toFixed(1)}`;
+				if (mm % 5 === 0) ticks += ` M ${q0[0].toFixed(1)} ${q0[1].toFixed(1)} L ${q1[0].toFixed(1)} ${q1[1].toFixed(1)}`;
+				if (mm % 10 === 0) {
+					const lp = pt(lx, -RULER_HALF_THICKNESS + 23);
+					const num = svgEl("text", "pl-guide-cm");
+					num.setAttribute("x", lp[0].toFixed(1));
+					num.setAttribute("y", lp[1].toFixed(1));
+					num.setAttribute("text-anchor", "middle");
+					num.setAttribute("transform", `rotate(${settings.rulerAngle} ${lp[0].toFixed(1)} ${lp[1].toFixed(1)})`);
+					num.textContent = String(mm / 10);
+					this.guideLabels.appendChild(num);
+				}
+			}
+			this.guideTicks.setAttribute("d", ticks);
+
+			const anglePos = pt(0, 6);
+			const angleText = svgEl("text", "pl-guide-readout");
+			angleText.setAttribute("x", anglePos[0].toFixed(1));
+			angleText.setAttribute("y", anglePos[1].toFixed(1));
+			angleText.setAttribute("text-anchor", "middle");
+			angleText.setAttribute("transform", `rotate(${settings.rulerAngle} ${anglePos[0].toFixed(1)} ${anglePos[1].toFixed(1)})`);
+			angleText.textContent = `${Math.round(settings.rulerAngle)}°`;
+			this.guideLabels.appendChild(angleText);
+
+			const movePos = pt(-RULER_HALF_LENGTH + 26, 0);
+			this.guideGrip.setAttribute("cx", movePos[0].toFixed(1));
+			this.guideGrip.setAttribute("cy", movePos[1].toFixed(1));
+			this.guideRotateGrip.setAttribute("cx", geom.rotateHandle[0].toFixed(1));
+			this.guideRotateGrip.setAttribute("cy", geom.rotateHandle[1].toFixed(1));
+
+			const resetPos = pt(-52, RULER_HALF_THICKNESS + 18);
+			const closePos = pt(52, RULER_HALF_THICKNESS + 18);
+			addActionBtn(this.guideResetBtn, resetPos[0], resetPos[1], "0°", "Winkel auf 0° setzen");
+			addActionBtn(this.guideCloseBtn, closePos[0], closePos[1], "×", "Lineal schließen");
+			return;
+		}
+
+		// Set square (Geodreieck)
+		const half = this.guideHalfSize();
+		const edges = setSquareEdges(origin, settings.setSquareAngle, half);
 		const [a, b, c] = edges.map(([from]) => from);
 		const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
 		const dx = (b[0] - a[0]) / length;
 		const dy = (b[1] - a[1]) / length;
-		const halfCentimeter = 96 / 5.08;
-		let outline = `M ${a.join(" ")} L ${b.join(" ")} L ${c.join(" ")} Z`;
-		for (let mark = 1; mark * halfCentimeter < length; mark++) {
-			const distance = mark * halfCentimeter;
+		this.guideOutline.setAttribute("d", `M ${a.join(" ")} L ${b.join(" ")} L ${c.join(" ")} Z`);
+
+		let ticks = "";
+		const totalMm = Math.floor(length / PX_PER_MM);
+		for (let mm = 1; mm < totalMm; mm++) {
+			const distance = mm * PX_PER_MM;
 			const x = a[0] + dx * distance;
 			const y = a[1] + dy * distance;
-			const size = mark % 2 === 0 ? 9 : 5;
-			outline += ` M ${x} ${y} l ${-dy * size} ${dx * size}`;
+			const size = mm % 10 === 0 ? 12 : mm % 5 === 0 ? 8 : 4;
+			ticks += ` M ${x.toFixed(1)} ${y.toFixed(1)} l ${(-dy * size).toFixed(1)} ${(dx * size).toFixed(1)}`;
+			if (mm % 10 === 0 && mm < totalMm - 3) {
+				const lx = x - dy * 21;
+				const ly = y + dx * 21;
+				const num = svgEl("text", "pl-guide-cm");
+				num.setAttribute("x", lx.toFixed(1));
+				num.setAttribute("y", ly.toFixed(1));
+				num.setAttribute("text-anchor", "middle");
+				num.setAttribute("transform", `rotate(${settings.setSquareAngle} ${lx.toFixed(1)} ${ly.toFixed(1)})`);
+				num.textContent = String(mm / 10);
+				this.guideLabels.appendChild(num);
+			}
 		}
-		this.guideOutline.setAttribute("d", outline);
-		this.guideGrip.setAttribute("cx", String((a[0] + b[0] + c[0]) / 3));
-		this.guideGrip.setAttribute("cy", String((a[1] + b[1] + c[1]) / 3));
+		this.guideTicks.setAttribute("d", ticks);
+		const cx = (a[0] + b[0] + c[0]) / 3;
+		const cy = (a[1] + b[1] + c[1]) / 3;
+		this.guideGrip.setAttribute("cx", String(cx));
+		this.guideGrip.setAttribute("cy", String(cy));
+		this.guideRotateGrip.setAttribute("cx", String(b[0] - dx * 22 - dy * 12));
+		this.guideRotateGrip.setAttribute("cy", String(b[1] - dy * 22 + dx * 12));
+
+		const badge = svgEl("text", "pl-guide-readout");
+		badge.setAttribute("x", String(cx));
+		badge.setAttribute("y", String(cy - 20));
+		badge.setAttribute("text-anchor", "middle");
+		badge.textContent = `${Math.round(settings.setSquareAngle)}°`;
+		this.guideLabels.appendChild(badge);
+		addActionBtn(this.guideResetBtn, c[0] - 24, c[1] + 18, "0°", "Geodreieck auf 0° setzen");
+		addActionBtn(this.guideCloseBtn, c[0] + 24, c[1] + 18, "×", "Geodreieck schließen");
 	}
 
 	private readonly onGuideDown = (event: PointerEvent): void => {
-		if (!this.guideOrigin || this.active || this.guideDrag || event.button !== 0) return;
+		if (!this.guideOrigin || this.active || (event.pointerType === "mouse" && event.button !== 0)) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const [x, y] = this.toOverlay(event, this.svg.getBoundingClientRect());
+		const target = event.currentTarget as Element;
+		try {
+			target.setPointerCapture(event.pointerId);
+		} catch {
+			/* ignore */
+		}
+		this.guideTouches.set(event.pointerId, [x, y]);
+		if (this.guideTouches.size === 2) {
+			const entries = [...this.guideTouches.entries()];
+			const s = this.host.getSettings();
+			const angle = s.ruler ? s.rulerAngle : s.setSquareAngle;
+			this.guidePinchStart = {
+				origin: [...this.guideOrigin] as XY,
+				angle,
+				radius: s.compassRadius,
+				idA: entries[0][0],
+				a: entries[0][1],
+				idB: entries[1][0],
+				b: entries[1][1],
+			};
+			this.guideDrag = null;
+			return;
+		}
+		this.guideDrag = { mode: "move", id: event.pointerId, offset: [this.guideOrigin[0] - x, this.guideOrigin[1] - y] };
+	};
+
+	private readonly onGuideRotateDown = (event: PointerEvent): void => {
+		if (!this.guideOrigin || this.active || (event.pointerType === "mouse" && event.button !== 0)) return;
 		event.preventDefault();
 		event.stopPropagation();
 		const [x, y] = this.toOverlay(event, this.svg.getBoundingClientRect());
 		try {
-			this.guideGrip.setPointerCapture(event.pointerId);
+			this.guideRotateGrip.setPointerCapture(event.pointerId);
 		} catch {
+			/* ignore */
+		}
+		const s = this.host.getSettings();
+		if (s.compass) {
+			this.guideDrag = { mode: "radius", id: event.pointerId };
 			return;
 		}
-		this.guideDrag = { id: event.pointerId, offset: [this.guideOrigin[0] - x, this.guideOrigin[1] - y] };
+		const startPointerAngle = (Math.atan2(y - this.guideOrigin[1], x - this.guideOrigin[0]) * 180) / Math.PI;
+		const startAngle = s.ruler ? s.rulerAngle : s.setSquareAngle;
+		this.guideDrag = { mode: "rotate", id: event.pointerId, startAngle, startPointerAngle };
 	};
 
 	private readonly onGuideMove = (event: PointerEvent): void => {
+		if (!this.guideOrigin) return;
+		const [x, y] = this.toOverlay(event, this.svg.getBoundingClientRect());
+		if (this.guideTouches.has(event.pointerId)) {
+			this.guideTouches.set(event.pointerId, [x, y]);
+		}
+		if (this.guidePinchStart && this.guideTouches.size >= 2) {
+			const p = this.guidePinchStart;
+			const curA = this.guideTouches.get(p.idA);
+			const curB = this.guideTouches.get(p.idB);
+			if (curA && curB) {
+				event.preventDefault();
+				event.stopPropagation();
+				const tf = twoFingerGuideTransform(p.origin, p.angle, p.a, p.b, curA, curB, 3);
+				this.guideOrigin = tf.origin;
+				const s = this.host.getSettings();
+				if (s.ruler) this.host.updateSettings?.({ rulerAngle: tf.angle });
+				else if (s.setSquare) this.host.updateSettings?.({ setSquareAngle: tf.angle });
+				else if (s.compass) {
+					const nextR = Math.max(40, Math.min(200, Math.round(p.radius * tf.scaleRatio)));
+					this.host.updateSettings?.({ compassRadius: nextR });
+				}
+				this.renderGuide();
+			}
+			return;
+		}
 		const drag = this.guideDrag;
 		if (!drag || event.pointerId !== drag.id) return;
-		const [x, y] = this.toOverlay(event, this.svg.getBoundingClientRect());
-		this.guideOrigin = [x + drag.offset[0], y + drag.offset[1]];
-		this.renderGuide();
+		event.preventDefault();
+		event.stopPropagation();
+		const s = this.host.getSettings();
+		if (drag.mode === "move") {
+			this.guideOrigin = [x + drag.offset[0], y + drag.offset[1]];
+			this.renderGuide();
+		} else if (drag.mode === "rotate") {
+			const curAng = (Math.atan2(y - this.guideOrigin[1], x - this.guideOrigin[0]) * 180) / Math.PI;
+			const nextAng = snapGuideAngle(drag.startAngle + (curAng - drag.startPointerAngle), 3);
+			if (s.ruler) this.host.updateSettings?.({ rulerAngle: nextAng });
+			else if (s.setSquare) this.host.updateSettings?.({ setSquareAngle: nextAng });
+			this.renderGuide();
+		} else if (drag.mode === "radius") {
+			const nextR = Math.max(40, Math.min(200, Math.round(Math.hypot(x - this.guideOrigin[0], y - this.guideOrigin[1]))));
+			this.host.updateSettings?.({ compassRadius: nextR });
+			this.renderGuide();
+		}
 	};
 
 	private readonly onGuideEnd = (event: PointerEvent): void => {
+		this.guideTouches.delete(event.pointerId);
+		if (this.guideTouches.size < 2) this.guidePinchStart = null;
 		if (this.guideDrag?.id === event.pointerId) this.guideDrag = null;
+	};
+
+	private readonly onGuideResetDown = (event: PointerEvent): void => {
+		event.preventDefault();
+		event.stopPropagation();
+		const s = this.host.getSettings();
+		if (s.ruler) this.host.updateSettings?.({ rulerAngle: s.rulerAngle === 0 ? 90 : 0 });
+		else if (s.setSquare) this.host.updateSettings?.({ setSquareAngle: 0 });
+		else if (s.compass) this.host.updateSettings?.({ compassRadius: 100 });
+	};
+
+	private readonly onGuideCloseDown = (event: PointerEvent): void => {
+		event.preventDefault();
+		event.stopPropagation();
+		this.host.updateSettings?.({ ruler: false, setSquare: false, compass: false });
 	};
 
 	/** Client coordinates → overlay coordinates. */
 	private clientToOverlay(clientX: number, clientY: number, rect: DOMRect): XY {
-		const sx = this.view.scaleX || 1;
-		const sy = this.view.scaleY || 1;
+		const sx = this.effectiveScaleX();
+		const sy = this.effectiveScaleY();
 		return [(clientX - rect.left) / sx, (clientY - rect.top) / sy];
 	}
 
@@ -1092,23 +1652,58 @@ export class InkView implements PluginValue {
 	private readonly onTouch = (e: TouchEvent): void => {
 		if (this.isUiTarget(e.target)) return;
 		let stylus = false;
+		const direct: { x: number; y: number }[] = [];
 		for (let i = 0; i < e.changedTouches.length; i++) {
 			if ((e.changedTouches[i] as Touch & { touchType?: string }).touchType === "stylus") stylus = true;
 		}
-		if (!stylus) {
-			for (let i = 0; i < e.touches.length; i++) {
-				if ((e.touches[i] as Touch & { touchType?: string }).touchType === "stylus") stylus = true;
-			}
+		for (let i = 0; i < e.touches.length; i++) {
+			const t = e.touches[i] as Touch & { touchType?: string };
+			if (t.touchType === "stylus") stylus = true;
+			else if (typeof t.clientX === "number" && typeof t.clientY === "number") direct.push({ x: t.clientX, y: t.clientY });
 		}
 		if (stylus) {
+			this.pinch = null;
 			// Blocks scrolling, selection/caret moves, compat mouse events and iPadOS Scribble.
 			if (e.cancelable) e.preventDefault();
 			e.stopPropagation();
-		} else if (this.active && e.type === "touchmove" && e.cancelable) {
+			return;
+		}
+		if (this.active && e.type === "touchmove" && e.cancelable) {
 			// A resting palm/finger must not scroll the page out from under an active pen stroke,
 			// and a finger dragging the selection must not scroll either.
 			e.preventDefault();
-		} else if (e.type === "touchstart" && this.selection && e.cancelable && e.touches.length === 1) {
+			return;
+		}
+		// Two-finger pinch-to-zoom + focal-point pan directly on the note page.
+		if (!this.active && !this.guideDrag && !this.guidePinchStart) {
+			if (direct.length === 2) {
+				this.navTap = null;
+				const dist = distanceBetween(direct[0], direct[1]);
+				const mid = midpoint(direct[0], direct[1]);
+				if (e.type === "touchstart" || !this.pinch) {
+					this.pinch = {
+						activation: new PinchActivation(dist, 0.03),
+						startZoom: this.zoom,
+						prevMid: mid,
+						lastZoom: this.zoom,
+					};
+				} else if (e.type === "touchmove") {
+					if (e.cancelable) e.preventDefault();
+					const ratio = this.pinch.activation.ratio(dist);
+					const nextZoom = this.pinch.activation.active
+						? pinchScale(this.pinch.startZoom, 1, ratio, ZOOM_MIN, ZOOM_MAX)
+						: this.pinch.startZoom;
+					this.setZoom(nextZoom, mid, this.pinch.prevMid);
+					this.pinch.prevMid = mid;
+					this.pinch.lastZoom = nextZoom;
+				}
+				return;
+			}
+			if (this.pinch && (e.type === "touchend" || e.type === "touchcancel" || direct.length < 2)) {
+				this.pinch = null;
+			}
+		}
+		if (e.type === "touchstart" && this.selection && e.cancelable && e.touches.length === 1) {
 			// A finger starting on the selection drags it instead of scrolling.
 			const t = e.changedTouches[0];
 			const [x, y] = this.clientToOverlay(t.clientX, t.clientY, this.svg.getBoundingClientRect());
@@ -1157,6 +1752,11 @@ export class InkView implements PluginValue {
 		e.preventDefault();
 		e.stopPropagation();
 		if (this.active || !this.path || !this.store.isLoaded(this.path)) return;
+		// Never auto-convert a formula mid-stroke while the user puts the pen down to keep writing.
+		if (this.mathTimer !== null) {
+			window.clearTimeout(this.mathTimer);
+			this.mathTimer = null;
+		}
 
 		const settings = this.host.getSettings();
 		if (!settings.inkVisible) this.host.showInk();
@@ -1242,9 +1842,9 @@ export class InkView implements PluginValue {
 		const smoother = new StrokeSmoother(SMOOTHING_PARAMS[settings.smoothing]);
 		smoother.push(x, y, p, eventTime(e));
 		const edge = tool === "pen" && (settings.penShape === "freehand" || settings.penShape === "line")
-			? nearestGuideEdge([x, y], this.guideEdges(), 14) : null;
+			? nearestGuideEdge([x, y], this.guideEdges(), 18) : null;
 		const compass = tool === "pen" && settings.penShape === "freehand" && settings.compass && this.guideOrigin
-			? startCompassDrag([x, y], this.guideOrigin, settings.compassRadius, 14) : null;
+			? startCompassDrag([x, y], this.guideOrigin, settings.compassRadius, 18) : null;
 		const shape = edge ? "line" : tool === "pen" ? settings.penShape : "freehand";
 		const geometry: DrawGeometry | null = compass ? { kind: "compass", drag: compass } : shape === "freehand" ? null : {
 			kind: "shape", shape, start: edge ? projectToEdge([x, y], edge) : [x, y], edge, end: null,
@@ -1337,8 +1937,29 @@ export class InkView implements PluginValue {
 		e.preventDefault();
 		e.stopPropagation();
 		const rect = this.svg.getBoundingClientRect();
-		const evs = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : [];
-		const list = evs.length > 0 ? evs : [e];
+		let rawCoalesced: PointerEvent[] = [];
+		if (typeof e.getCoalescedEvents === "function") {
+			try {
+				rawCoalesced = e.getCoalescedEvents();
+			} catch {
+				rawCoalesced = [];
+			}
+		}
+		const list: PointerEvent[] = [];
+		for (const ev of rawCoalesced) {
+			if (!Number.isFinite(ev.clientX) || !Number.isFinite(ev.clientY)) continue;
+			// Guard against WebKit uninitialized (0, 0) coalesced frames far away from the parent event.
+			if (ev.clientX === 0 && ev.clientY === 0 && (Math.abs(e.clientX) > 20 || Math.abs(e.clientY) > 20)) continue;
+			list.push(ev);
+		}
+		if (list.length === 0) {
+			list.push(e);
+		} else {
+			const tail = list[list.length - 1];
+			if (Math.hypot(tail.clientX - e.clientX, tail.clientY - e.clientY) > 0.5 && Number.isFinite(e.clientX) && Number.isFinite(e.clientY)) {
+				list.push(e);
+			}
+		}
 		const now = performance.now();
 		const settings = this.host.getSettings();
 		for (const ev of list) {
@@ -1466,14 +2087,25 @@ export class InkView implements PluginValue {
 		}
 		if (a.kind === "draw") {
 			this.clearHold(a);
+			const [x, y, p] = this.toOverlay(e, this.svg.getBoundingClientRect());
 			if (a.geometry) {
-				const [x, y] = this.toOverlay(e, this.svg.getBoundingClientRect());
 				a.maxMove = Math.max(a.maxMove, Math.hypot(x - a.downX, y - a.downY));
 				this.moveGeometry(a.geometry, [x, y]);
 				this.updateDrawGeometry(a);
-			} else if (e.pointerType === "pen" && e.pressure === 0 && a.smoother.tip) {
-				// PointerEvent.pressure is 0 on pointerup per spec: reuse last contact pressure instead of 0.5.
-				a.smoother.tip[2] = a.lastPressure;
+			} else if (a.straight) {
+				a.points = straightLine(a.straight, [x, y]);
+			} else if (!a.snap && Number.isFinite(x) && Number.isFinite(y)) {
+				// Capture the lift coordinate so fast strokes never lose their final segment between
+				// the last pointermove and pointerup, reusing last contact pressure when pressure === 0.
+				const finalP = e.pointerType === "pen" && e.pressure === 0 ? a.lastPressure : p;
+				const tip = a.smoother.tip;
+				if (!tip || Math.hypot(x - tip[0], y - tip[1]) > 0.5) {
+					a.maxMove = Math.max(a.maxMove, Math.hypot(x - a.downX, y - a.downY));
+					a.tiltSamples.push({ x, y, tilt: a.lastTilt });
+					a.smoother.push(x, y, finalP, eventTime(e));
+				} else if (e.pointerType === "pen" && e.pressure === 0) {
+					tip[2] = a.lastPressure;
+				}
 			}
 		}
 		if (a.kind === "lasso") {
@@ -1721,8 +2353,12 @@ export class InkView implements PluginValue {
 		}
 		if (this.geo) this.store.setContentWidth(path, Math.round(this.geo.width));
 		this.store.addStroke(path, stroke);
+		if (box && this.geo && box.maxY > this.geo.height - 320) {
+			this.extraPages = Math.min(40, this.extraPages + 1);
+		}
 		if (a.tool === "pen" && !a.snap && settings.mathMode) {
 			this.mathBuffer.push(stroke.id);
+			this.showMathBufferBar();
 			this.armMathTimer();
 		}
 		if (box) {
@@ -2640,11 +3276,17 @@ export class InkView implements PluginValue {
 			return;
 		}
 		const geo = this.geo;
+		const z = this.zoom || 1;
 		const target: BBox =
 			this.menu.kind === "paste"
 				? { minX: this.menu.at[0], minY: this.menu.at[1], maxX: this.menu.at[0], maxY: this.menu.at[1] }
 				: box!;
-		const t: BBox = { minX: target.minX + geo.left, minY: target.minY + geo.top, maxX: target.maxX + geo.left, maxY: target.maxY + geo.top };
+		const t: BBox = {
+			minX: target.minX * z + geo.left,
+			minY: target.minY * z + geo.top,
+			maxX: target.maxX * z + geo.left,
+			maxY: target.maxY * z + geo.top,
+		};
 		el.classList.remove("pl-hidden");
 		const w = el.offsetWidth;
 		const h = el.offsetHeight;
@@ -2702,6 +3344,9 @@ export class InkView implements PluginValue {
 		this.menuItem(el, "trash-2", "Delete", () => this.deleteSelection());
 		this.menuItem(el, "palette", "Color", () => this.setColorsOpen(true), "pl-menu-sub");
 		this.menuItem(el, "fx", "To LaTeX", () => void this.convertSelectionToLatex());
+		if (this.host.openAssistant) {
+			this.menuItem(el, "sparkles", "Frag KI", () => this.askGeminiOnSelection());
+		}
 		this.menuItem(el, "camera", "Screenshot", () => this.screenshotSelection());
 	}
 
@@ -2808,11 +3453,128 @@ export class InkView implements PluginValue {
 			this.mathTimer = null;
 		}
 		this.mathBuffer = [];
+		if (!this.pendingMath) this.clearMathBar();
+	}
+
+	private clearMathBar(): void {
+		this.pendingMath = null;
+		this.mathBarEl?.remove();
+		this.mathBarEl = null;
+	}
+
+	private ensureMathBar(): HTMLElement | null {
+		const leaf = this.view.scrollDOM.closest?.<HTMLElement>(".workspace-leaf-content") ?? null;
+		if (!leaf || typeof leaf.createDiv !== "function") return null;
+		if (!this.mathBarEl || !this.mathBarEl.isConnected) {
+			const bar = leaf.createDiv({ cls: "pl-math-bar" });
+			bar.addEventListener("pointerdown", (e) => e.stopPropagation());
+			blockStylusTouch(bar);
+			this.mathBarEl = bar;
+		}
+		return this.mathBarEl;
+	}
+
+	private showMathBufferBar(): void {
+		const bar = this.ensureMathBar();
+		if (!bar) return;
+		bar.empty();
+		const count = this.mathBuffer.length;
+		bar.createSpan({ cls: "pl-math-status", text: `Formel (${count} ${count === 1 ? "Strich" : "Striche"})` });
+		const go = bar.createEl("button", { cls: "mod-cta pl-math-btn", text: "→ LaTeX" });
+		onTap(go, () => {
+			if (this.mathTimer !== null) {
+				window.clearTimeout(this.mathTimer);
+				this.mathTimer = null;
+			}
+			void this.flushMathBuffer();
+		});
+		const cancel = bar.createEl("button", { cls: "pl-math-btn", text: "×" });
+		onTap(cancel, () => {
+			this.clearMathBuffer();
+			this.clearMathBar();
+		});
+	}
+
+	private showMathConfirmBar(pending: { path: string; strokeIds: string[]; rawTex: string; midY: number; box: BBox }, usedVision: boolean): void {
+		const bar = this.ensureMathBar();
+		if (!bar) {
+			// Headless / test environment fallback: commit immediately.
+			this.pendingMath = pending;
+			this.commitPendingMath(pending.rawTex);
+			return;
+		}
+		this.pendingMath = pending;
+		bar.empty();
+		bar.createSpan({ cls: "pl-math-badge", text: usedVision ? "Gemini LaTeX" : "LaTeX" });
+		const input = bar.createEl("input", {
+			cls: "pl-math-input",
+			type: "text",
+			value: pending.rawTex,
+			attr: { "aria-label": "Erkannte LaTeX-Formel bearbeiten" },
+		});
+		input.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") {
+				e.preventDefault();
+				this.commitPendingMath(input.value);
+			} else if (e.key === "Escape") {
+				e.preventDefault();
+				this.clearMathBar();
+			}
+		});
+		const insertBtn = bar.createEl("button", { cls: "mod-cta pl-math-btn", text: "Einfügen" });
+		onTap(insertBtn, () => this.commitPendingMath(input.value));
+		const cancelBtn = bar.createEl("button", { cls: "pl-math-btn", text: "Behalten" });
+		onTap(cancelBtn, () => this.clearMathBar());
+	}
+
+	private commitPendingMath(rawTex: string): boolean {
+		const pending = this.pendingMath;
+		this.clearMathBar();
+		if (!pending || this.destroyed || this.path !== pending.path || !this.store.isLoaded(pending.path)) return false;
+		const settings = this.host.getSettings();
+		const formatted = formatLatexFormula(rawTex, settings.mathDelimiters);
+		if (!formatted) {
+			new Notice("Leere Formel — Handschrift wurde behalten.");
+			return false;
+		}
+		const ink = this.store.get(pending.path);
+		const onCanvas = new Set((ink?.strokes ?? []).map((s) => s.id));
+		const removeIds = pending.strokeIds.filter((id) => onCanvas.has(id));
+		if (removeIds.length > 0) this.store.removeStrokes(pending.path, removeIds, newId());
+
+		this.applyGeometry(this.readGeometry(this.view));
+		const rect = this.svg.getBoundingClientRect();
+		const sx = this.effectiveScaleX();
+		const doc = this.view.state.doc;
+		const lineH = this.view.defaultLineHeight || 24;
+		const lastLine = this.lineInfoAt(doc.lines, rect, sx);
+		const midY = pending.midY;
+		const targetLine = midY <= lastLine.bottom + lineH * 0.4
+			? doc.lineAt(this.view.lineBlockAtHeight(Math.max(0, midY)).from)
+			: doc.line(doc.lines);
+		const { prefixNewlines, from } = insertionPosForY(midY, lastLine, lineH, targetLine.to, doc.length);
+		const existingLine = doc.lineAt(from);
+		const leading =
+			prefixNewlines > 0
+				? "\n".repeat(prefixNewlines)
+				: existingLine.text.trim().length > 0 && formatted.startsWith("$$")
+					? "\n"
+					: existingLine.length > 0
+						? " "
+						: "";
+		const insert = `${leading}${formatted}`;
+		this.view.dispatch({
+			changes: { from, to: from, insert },
+			selection: { anchor: from + insert.length },
+			userEvent: "input",
+		});
+		new Notice(`LaTeX eingefügt: ${formatted}`, 2500);
+		return true;
 	}
 
 	private armMathTimer(): void {
 		if (this.mathTimer !== null) window.clearTimeout(this.mathTimer);
-		const delay = this.host.getSettings().mathAutoDelayMs || 1200;
+		const delay = this.host.getSettings().mathAutoDelayMs || 1600;
 		this.mathTimer = window.setTimeout(() => {
 			this.mathTimer = null;
 			void this.flushMathBuffer();
@@ -2836,6 +3598,50 @@ export class InkView implements PluginValue {
 		if (!sel || sel.length === 0) return;
 		const ok = await this.convertStrokesToLatex(sel);
 		if (ok) this.clearSelection();
+	}
+
+	private askGeminiOnSelection(): void {
+		const sel = this.selection;
+		const path = this.path;
+		if (!sel || sel.length === 0 || !path || !this.host.openAssistant) return;
+		const overlayStrokes: Stroke[] = [];
+		let minX = Infinity;
+		let minY = Infinity;
+		let maxX = -Infinity;
+		let maxY = -Infinity;
+		for (const s of sel) {
+			const [ox, top] = this.place(s);
+			const pts = s.points.map((p): Point => [p[0] + ox, p[1] + top, p[2]]);
+			const b = bbox(pts);
+			if (!b) continue;
+			minX = Math.min(minX, b.minX);
+			minY = Math.min(minY, b.minY);
+			maxX = Math.max(maxX, b.maxX);
+			maxY = Math.max(maxY, b.maxY);
+			overlayStrokes.push({ ...s, points: pts });
+		}
+		if (overlayStrokes.length === 0 || !Number.isFinite(minX)) return;
+		const png = strokesToPngBase64(overlayStrokes, { minX, minY, maxX, maxY });
+		const noteTitle = path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/i, "");
+		const noteContext = this.view.state.doc.toString();
+		this.host.openAssistant({
+			noteTitle,
+			noteContext,
+			imageBase64Png: png,
+			insertAtCursor: (text) => {
+				if (this.destroyed || this.path !== path) return false;
+				const st = this.view.state;
+				const head = st.selection.main.head;
+				const prefix = head > 0 && st.doc.sliceString(head - 1, head) !== "\n" ? "\n\n" : "";
+				const ins = `${prefix}${text}\n`;
+				this.view.dispatch({
+					changes: { from: head, insert: ins },
+					selection: { anchor: head + ins.length },
+					userEvent: "input",
+				});
+				return true;
+			},
+		});
 	}
 
 	private async convertStrokesToLatex(strokes: readonly Stroke[]): Promise<boolean> {
@@ -2862,43 +3668,32 @@ export class InkView implements PluginValue {
 
 		const settings = this.host.getSettings();
 		const box: BBox = { minX, minY, maxX, maxY };
-		const rawTex = await recognizeMathStrokes(overlayStrokes, box, {
+		const bar = this.ensureMathBar();
+		if (bar) {
+			bar.empty();
+			bar.createSpan({ cls: "pl-math-status", text: "Formel wird erkannt…" });
+		}
+		const { tex: rawTex, usedVision } = await recognizeMathStrokes(overlayStrokes, box, {
 			provider: settings.mathProvider,
 			apiKey: settings.mathApiKey,
+			geminiApiKey: settings.geminiApiKey,
 		});
 		if (this.destroyed || this.path !== path || !this.store.isLoaded(path)) return false;
-		const formatted = formatLatexFormula(rawTex, settings.mathDelimiters);
-		if (!formatted) {
-			new Notice("Could not recognize a formula in those strokes.");
+		if (!rawTex.trim()) {
+			this.clearMathBar();
+			new Notice("Keine Formel erkannt — tippe auf das Lasso-Menü oder hinterlege einen Gemini API-Key für handschriftliche Formeln.");
 			return false;
 		}
-
-		const ink = this.store.get(path);
-		const onCanvas = new Set((ink?.strokes ?? []).map((s) => s.id));
-		const removeIds = strokes.map((s) => s.id).filter((id) => onCanvas.has(id));
-		if (removeIds.length === 0) return false;
-
-		this.store.removeStrokes(path, removeIds, newId());
-		this.applyGeometry(this.readGeometry(this.view));
-		const rect = this.svg.getBoundingClientRect();
-		const sx = this.view.scaleX || 1;
-		const doc = this.view.state.doc;
-		const lineH = this.view.defaultLineHeight || 24;
-		const lastLine = this.lineInfoAt(doc.lines, rect, sx);
-		const midY = (minY + maxY) / 2;
-		const targetLine = midY <= lastLine.bottom + lineH * 0.4
-			? doc.lineAt(this.view.lineBlockAtHeight(Math.max(0, midY)).from)
-			: doc.line(doc.lines);
-		const { prefixNewlines, from } = insertionPosForY(midY, lastLine, lineH, targetLine.to, doc.length);
-		const existingLine = doc.lineAt(from);
-		const leading = prefixNewlines > 0 ? "\n".repeat(prefixNewlines) : existingLine.text.trim().length > 0 && formatted.startsWith("$$") ? "\n" : existingLine.length > 0 ? " " : "";
-		const insert = `${leading}${formatted}`;
-		this.view.dispatch({
-			changes: { from, to: from, insert },
-			selection: { anchor: from + insert.length },
-			userEvent: "input",
-		});
-		new Notice(`LaTeX: ${formatted}`, 2500);
+		this.showMathConfirmBar(
+			{
+				path,
+				strokeIds: strokes.map((s) => s.id),
+				rawTex,
+				midY: (minY + maxY) / 2,
+				box,
+			},
+			usedVision,
+		);
 		return true;
 	}
 }

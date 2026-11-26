@@ -7,6 +7,7 @@ import {
 	hitTestStrokeSegment,
 	centerlinePath,
 	dashArray,
+	densifyPoints,
 	isCenterline,
 	isDashed,
 	outlineToPath,
@@ -245,6 +246,30 @@ describe("hitTestStroke", () => {
 			const s = { tool: "pen" as const, size: 2, style, points: pts };
 			expect(isCenterline(s)).toBe(false);
 			expect(strokeToPath(s)).toMatch(/^M.*Z$/);
+		}
+	});
+
+	it("densifies sparse fast-drag strokes so perfect-freehand outlines never pinch or break", () => {
+		const sparse: Point[] = [
+			[0, 0, 0.2],
+			[120, 15, 0.6],
+			[250, -10, 0.1],
+			[380, 20, 0.5],
+		];
+		const tilts = [0.2, 0.8, 0.85, 0.3];
+		const dense = densifyPoints(sparse, 6, tilts);
+		expect(dense.points.length).toBeGreaterThan(40);
+		expect(dense.tilts?.length).toBe(dense.points.length);
+		// Every consecutive step stays <= 8 px (smooth Catmull-Rom curve subdivision).
+		for (let i = 1; i < dense.points.length; i++) {
+			const d = Math.hypot(dense.points[i][0] - dense.points[i - 1][0], dense.points[i][1] - dense.points[i - 1][1]);
+			expect(d).toBeLessThanOrEqual(8);
+		}
+		// Single connected closed outline path (exactly one M and one Z).
+		for (const style of ["notes", "pencil", "calligraphy", "ball"] as const) {
+			const d = strokeToPath({ tool: "pen", size: 1.6, style, points: sparse, tilts });
+			expect(d.match(/M/g)?.length).toBe(1);
+			expect(d.endsWith("Z")).toBe(true);
 		}
 	});
 });

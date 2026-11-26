@@ -14,6 +14,7 @@ import type { ExportChoice, ExportOptions } from "./exportOnce";
 import { DocFont, ExportStyle, styleExportLabel } from "./docStyle";
 import { PAGE_GUIDE_FORMATS, PAGE_GUIDE_LABELS, PageGuideFormat, nextPageGuide } from "./pageGuides";
 import { PENCIL_GESTURE_ACTIONS, PencilGestureAction, PencilGestureDetail, resolvePencilAction, resolvePencilGesture } from "./pencilGestures";
+import { AssistantLaunchOptions, GEMINI_MODELS, GEMINI_WEB_URL, GeminiAssistantModal, GeminiModel } from "./aiAssistant";
 import {
 	ActiveTool,
 	DEFAULT_PEN_WIDTHS,
@@ -280,6 +281,58 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 		new ScreenshotModal(this.app, src, this.settings.screenshotFolder).open();
 	}
 
+	openAssistant(opts: AssistantLaunchOptions = {}): void {
+		new GeminiAssistantModal(
+			this.app,
+			{
+				getApiKey: () => this.settings.geminiApiKey || this.settings.mathApiKey,
+				setApiKey: (key) => this.updateSettings({ geminiApiKey: key }),
+				getModel: () => this.settings.geminiModel,
+				setModel: (model) => this.updateSettings({ geminiModel: model }),
+			},
+			opts,
+		).open();
+	}
+
+	openAssistantForView(view: MarkdownView): void {
+		const noteTitle = view.file?.basename ?? "";
+		const noteContext = view.editor?.getValue?.() ?? "";
+		this.openAssistant({
+			noteTitle,
+			noteContext,
+			insertAtCursor: (text) => {
+				const ed = view.editor;
+				if (!ed) return false;
+				const cursor = ed.getCursor();
+				const lineText = ed.getLine(cursor.line);
+				const prefix = cursor.ch > 0 && lineText.trim().length > 0 ? "\n\n" : "";
+				ed.replaceRange(`${prefix}${text}\n`, cursor);
+				return true;
+			},
+		});
+	}
+
+	addBlankPage(view: MarkdownView): void {
+		this.inkViewOf(view)?.addBlankPage();
+		new Notice("Zusätzlicher Seitenbereich unten hinzugefügt.", 1800);
+	}
+
+	getZoom(view: MarkdownView): number {
+		return this.inkViewOf(view)?.getZoom() ?? 1;
+	}
+
+	zoomIn(view: MarkdownView): void {
+		this.inkViewOf(view)?.zoomIn();
+	}
+
+	zoomOut(view: MarkdownView): void {
+		this.inkViewOf(view)?.zoomOut();
+	}
+
+	resetZoom(view: MarkdownView): void {
+		this.inkViewOf(view)?.resetZoom();
+	}
+
 	// -------------------------------------------------------------------------------------------
 	// [Stage F] Desktop Select tool (slim toolbar) — session state, not persisted: after a restart
 	// the mouse behaves normally until Select is picked again.
@@ -507,6 +560,30 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 				const next = nextPageGuide(this.settings.pageGuide);
 				this.updateSettings({ pageGuide: next });
 				new Notice(`Page boundary guide: ${PAGE_GUIDE_LABELS[next]}`, 1800);
+			},
+		});
+		this.addCommand({
+			id: "toggle-ruler",
+			name: "Toggle straight ruler (Lineal)",
+			callback: () => {
+				const next = !this.settings.ruler;
+				this.updateSettings({
+					ruler: next,
+					...(next ? { setSquare: false, compass: false, tool: "pen", penShape: "freehand", inkVisible: true } : {}),
+				});
+			},
+		});
+		viewCommand("add-blank-page", "Add blank page space below note", (v) => this.addBlankPage(v));
+		viewCommand("zoom-in-page", "Zoom page in", (v) => this.zoomIn(v));
+		viewCommand("zoom-out-page", "Zoom page out", (v) => this.zoomOut(v));
+		viewCommand("zoom-reset-page", "Reset page zoom (100%)", (v) => this.resetZoom(v));
+		this.addCommand({
+			id: "open-gemini-assistant",
+			name: "Open Gemini AI assistant",
+			callback: () => {
+				const v = this.activeMarkdownView();
+				if (v) this.openAssistantForView(v);
+				else this.openAssistant();
 			},
 		});
 		// [Stage H] one-shot: they apply to that export only ("Include ink in PDF export" stays as set).
@@ -809,6 +886,29 @@ class PencilSettingTab extends PluginSettingTab {
 				for (const a of PENCIL_GESTURE_ACTIONS) d.addOption(a.value, a.label);
 				return d.setValue(s.squeezeAction).onChange((v) => this.plugin.updateSettings({ squeezeAction: v as PencilGestureAction }));
 			});
+		new Setting(containerEl).setName("Google Gemini & KI-Assistent (this device)").setHeading();
+		new Setting(containerEl)
+			.setName("Gemini API-Key (lokal auf diesem Gerät)")
+			.setDesc("Hinweis zum Google AI Pro Abo: Google erlaubt Drittanbieter-Apps keinen direkten Login in das Consumer-Abo (gemini.google.com). Mit einem kostenlosen Google AI Studio API-Key (aistudio.google.com/apikey) funktionieren sowohl der In-App KI-Assistent als auch die handschriftliche Formel-Erkennung direkt in Obsidian. Alternativ kannst du im KI-Assistenten jederzeit „In Google AI Pro öffnen“ nutzen.")
+			.addText((t) => {
+				t.inputEl.type = "password";
+				t.setPlaceholder("AIza...");
+				t.setValue(s.geminiApiKey);
+				t.onChange((v) => this.plugin.updateSettings({ geminiApiKey: v }));
+			})
+			.addButton((b) =>
+				b.setButtonText("Google AI Pro ↗").onClick(() => {
+					window.open(GEMINI_WEB_URL, "_blank", "noopener");
+				}),
+			);
+		new Setting(containerEl)
+			.setName("Gemini Modell")
+			.setDesc("Modell für den In-App KI-Assistenten.")
+			.addDropdown((d) => {
+				for (const m of GEMINI_MODELS) d.addOption(m.value, m.label);
+				return d.setValue(s.geminiModel).onChange((v) => this.plugin.updateSettings({ geminiModel: v as GeminiModel }));
+			});
+
 		new Setting(containerEl).setName("Formulas (LaTeX)").setHeading();
 		new Setting(containerEl)
 			.setName("Formula mode (auto LaTeX)")

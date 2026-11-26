@@ -75,12 +75,14 @@ export function pointerTilt(e: PenTiltEvent): number {
 
 /** Activation threshold (normalized tilt = deg / 90) below which tilt does not widen a stroke. */
 export function tiltThreshold(style?: string, tool?: string): number {
-	if (tool === "highlighter") return 38 / 90;
-	if (style === "pencil") return 22 / 90;
-	if (style === "calligraphy") return 28 / 90;
-	if (style === "marker") return 34 / 90;
-	if (style === "notes") return 32 / 90;
-	return 38 / 90;
+	if (tool === "highlighter") return 46 / 90;
+	if (style === "pencil") return 40 / 90;
+	if (style === "calligraphy") return 44 / 90;
+	if (style === "marker") return 46 / 90;
+	if (style === "notes") return 50 / 90;
+	// Normal Apple Pencil writing posture is 35–48° from vertical; keep upright writing crisp and
+	// only engage side-shading when intentionally tilted flatter.
+	return 50 / 90;
 }
 
 /**
@@ -91,12 +93,12 @@ export function tiltWidthMultiplier(tilt: number, style?: string, tool?: string)
 	if (!Number.isFinite(tilt) || tilt <= 0) return 1;
 	if (style === "dashed" || style === "dotted") return 1;
 	const t = clamp01(tilt);
-	if (tool === "highlighter") return 1 + 1.0 * smoothstep(38 / 90, 75 / 90, t);
-	if (style === "pencil") return 1 + 3.0 * smoothstep(22 / 90, 72 / 90, t);
-	if (style === "calligraphy") return 1 + 2.4 * smoothstep(28 / 90, 74 / 90, t);
-	if (style === "marker") return 1 + 1.3 * smoothstep(34 / 90, 75 / 90, t);
-	if (style === "notes") return 1 + 2.2 * smoothstep(32 / 90, 74 / 90, t);
-	return 1 + 2.0 * smoothstep(38 / 90, 75 / 90, t);
+	if (tool === "highlighter") return 1 + 1.0 * smoothstep(46 / 90, 76 / 90, t);
+	if (style === "pencil") return 1 + 2.8 * smoothstep(40 / 90, 74 / 90, t);
+	if (style === "calligraphy") return 1 + 2.2 * smoothstep(44 / 90, 75 / 90, t);
+	if (style === "marker") return 1 + 1.3 * smoothstep(46 / 90, 76 / 90, t);
+	if (style === "notes") return 1 + 2.2 * smoothstep(48 / 90, 76 / 90, t);
+	return 1 + 2.2 * smoothstep(50 / 90, 76 / 90, t);
 }
 
 export interface TiltSample {

@@ -66,6 +66,7 @@ import { blockStylusTouch, onTap } from "./tap";
 import type { ExportChoice } from "./exportOnce";
 import { otherStyle, styleExportLabel } from "./docStyle";
 import { PAGE_GUIDE_LABELS, PageGuideFormat } from "./pageGuides";
+import { formatZoomPercent } from "./zoom";
 
 export interface ToolbarHost {
 	getSettings(): PencilSettings;
@@ -83,6 +84,15 @@ export interface ToolbarHost {
 	// [Stage H] one-shot PDF export from the ⋯ menu
 	canExportPdf(view: MarkdownView): boolean;
 	exportPdf(view: MarkdownView, choice: ExportChoice): void;
+	/** Add extra blank scrollable page space to the current note editor. */
+	addBlankPage(view: MarkdownView): void;
+	/** Page zoom controls. */
+	getZoom(view: MarkdownView): number;
+	zoomIn(view: MarkdownView): void;
+	zoomOut(view: MarkdownView): void;
+	resetZoom(view: MarkdownView): void;
+	/** Open the in-app Gemini AI assistant for this note. */
+	openAssistantForView(view: MarkdownView): void;
 }
 
 const PRESETS: { key: PenPreset; label: string }[] = [
@@ -116,7 +126,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const STRIP_SCROLL_MOVE = 8;
 
 type OptionsKind = "pen" | "highlighter" | "eraser" | "lasso";
-type PopoverKind = "more" | ActiveTool | "select" | "snap" | "geometry" | "palette";
+type PopoverKind = "more" | ActiveTool | "select" | "snap" | "geometry" | "ruler" | "palette";
 
 const SHAPE_ROWS: [DrawShape, string][][] = [
 	[["freehand", "Freehand"], ["line", "Line"], ["arrow", "Arrow"]],
@@ -150,8 +160,10 @@ export class InkToolbar {
 	private readonly undoBtn: HTMLElement;
 	private readonly redoBtn: HTMLElement;
 	private readonly moreBtn: HTMLElement;
+	private readonly rulerBtn: HTMLElement;
 	private readonly geometryBtn: HTMLElement;
 	private readonly mathBtn: HTMLElement;
+	private readonly aiBtn: HTMLElement;
 	/** Stage M: the separator after the options area (where `optionsEl` returns from a popover). */
 	private readonly optionsEndSep: HTMLElement;
 	/** [Stage F] slim desktop variant: Select tool and Show/Hide ink buttons. */
@@ -221,11 +233,24 @@ export class InkToolbar {
 
 		const tools = this.barEl.createDiv({ cls: "pl-group pl-tools" });
 		for (const t of ["pen", "eraser", "highlighter", "lasso"] as const) this.toolButton(tools, t);
-		this.geometryBtn = this.button(tools, "shapes", "Geometry: shapes, set square, compass", () => this.togglePopover("geometry", this.geometryBtn));
+		this.rulerBtn = this.button(tools, "ruler", "Lineal / Geodreieck / Zirkel (erneut tippen für Optionen)", () => {
+			const s = this.host.getSettings();
+			const anyGuide = s.ruler || s.setSquare || s.compass;
+			if (!anyGuide) {
+				this.closePopover();
+				this.host.updateSettings({ tool: "pen", penShape: "freehand", ruler: true, setSquare: false, compass: false, inkVisible: true });
+			} else {
+				this.togglePopover("ruler", this.rulerBtn);
+			}
+		});
+		this.rulerBtn.addClasses(["pl-tool", "pl-full-only"]);
+		this.rulerBtn.setAttribute("aria-haspopup", "menu");
+		this.rulerBtn.setAttribute("aria-expanded", "false");
+		this.geometryBtn = this.button(tools, "shapes", "Formen & Seitengrenzen", () => this.togglePopover("geometry", this.geometryBtn));
 		this.geometryBtn.addClasses(["pl-tool", "pl-full-only"]);
 		this.geometryBtn.setAttribute("aria-haspopup", "menu");
 		this.geometryBtn.setAttribute("aria-expanded", "false");
-		this.mathBtn = this.button(tools, null, "Formula mode: handwrite math → LaTeX", () => {
+		this.mathBtn = this.button(tools, null, "Formel-Modus: Handschrift → LaTeX", () => {
 			const next = !this.host.getSettings().mathMode;
 			this.host.updateSettings({
 				mathMode: next,
@@ -234,6 +259,11 @@ export class InkToolbar {
 		});
 		this.mathBtn.addClasses(["pl-tool", "pl-full-only"]);
 		this.mathBtn.createSpan({ cls: "pl-fx-badge", text: "fx" });
+		this.aiBtn = this.button(tools, "sparkles", "Gemini KI-Assistent (Fragen stellen)", () => {
+			this.closePopover();
+			this.host.openAssistantForView(this.view);
+		});
+		this.aiBtn.addClass("pl-tool");
 		// [Stage F] desktop Select tool (slim variant only).
 		this.selectBtn = this.button(tools, SELECT_ICON, SELECT_OFF_LABEL, () => {
 			if (this.host.isDeskSelecting()) {
@@ -280,6 +310,7 @@ export class InkToolbar {
 		this.el.toggleClass("is-slim", slim);
 		if (this.popoverKind === "select" && !selecting) this.closePopover();
 		if (this.popoverKind === "geometry" && slim) this.closePopover();
+		if (this.popoverKind === "ruler" && slim) this.closePopover();
 		this.selectBtn.toggleClass("is-active", selecting);
 		// [Stage H] Select on is obvious: solid accent button + accent ring around the bar; the label says how out.
 		this.el.toggleClass("is-selecting", selecting);
@@ -299,10 +330,12 @@ export class InkToolbar {
 		this.eyeBtn.toggleClass("is-active", !s.inkVisible);
 		// A tool popover belongs to the active tool.
 		const k = this.popoverKind;
-		if (k && k !== "more" && k !== "select" && k !== "snap" && k !== "geometry" && k !== "palette" && (slim || k !== s.tool)) {
+		if (k && k !== "more" && k !== "select" && k !== "snap" && k !== "geometry" && k !== "ruler" && k !== "palette" && (slim || k !== s.tool)) {
 			this.closePopover();
 		}
-		this.geometryBtn.toggleClass("is-active", s.setSquare || s.compass || (s.tool === "pen" && s.penShape !== "freehand"));
+		this.rulerBtn.toggleClass("is-active", s.ruler || s.setSquare || s.compass);
+		this.rulerBtn.toggleClass("is-open", this.popoverKind === "ruler");
+		this.geometryBtn.toggleClass("is-active", s.tool === "pen" && s.penShape !== "freehand");
 		this.mathBtn.toggleClass("is-active", s.mathMode);
 		for (const [tool, b] of this.toolBtns) {
 			b.toggleClass("is-active", tool === s.tool);
@@ -696,7 +729,7 @@ export class InkToolbar {
 		this.renderPopover(el, kind);
 		this.placePopoverEl(el);
 		anchor.addClass("is-open");
-		if (kind === "geometry") anchor.setAttribute("aria-expanded", "true");
+		if (kind === "geometry" || kind === "ruler") anchor.setAttribute("aria-expanded", "true");
 		this.el.ownerDocument.addEventListener("pointerdown", this.onOutside, true);
 	}
 
@@ -713,6 +746,7 @@ export class InkToolbar {
 		if (!k) return null;
 		if (k === "select") return this.selectBtn; // [Stage F]
 		if (k === "snap") return this.grip; // [Stage M]
+		if (k === "ruler") return this.rulerBtn;
 		if (k === "geometry") return this.geometryBtn;
 		if (k === "palette") return this.toolBtns.get(this.host.getSettings().tool) ?? this.moreBtn;
 		return k === "more" ? this.moreBtn : (this.toolBtns.get(k) ?? null);
@@ -740,6 +774,7 @@ export class InkToolbar {
 		this.returnOptions();
 		this.popoverAnchor()?.removeClass("is-open");
 		if (this.popoverKind === "geometry") this.geometryBtn.setAttribute("aria-expanded", "false");
+		if (this.popoverKind === "ruler") this.rulerBtn.setAttribute("aria-expanded", "false");
 		this.popover.remove();
 		this.popover = null;
 		this.popoverKind = null;
@@ -791,6 +826,8 @@ export class InkToolbar {
 				}
 				break;
 			case "more":
+				this.menuItem(el, "sparkles", "Gemini KI-Assistent fragen", false, () => this.host.openAssistantForView(this.view));
+				this.menuItem(el, "file-plus-2", "Weitere Seite anhängen (+ Platz)", false, () => this.host.addBlankPage(this.view));
 				this.menuItem(el, s.inkVisible ? "eye-off" : "eye", s.inkVisible ? "Hide ink" : "Show ink", false, () =>
 					set({ inkVisible: !s.inkVisible }),
 				);
@@ -814,6 +851,12 @@ export class InkToolbar {
 						set({ toolbarPos: null, toolbarEdge: "bottom" }),
 					);
 				}
+				this.subtitle(el, "Zoom (auch 2-Finger-Pinch)");
+				this.segmented(el, [
+					{ label: "−", active: false, run: () => this.host.zoomOut(this.view) },
+					{ label: formatZoomPercent(this.host.getZoom(this.view)), active: Math.abs(this.host.getZoom(this.view) - 1) < 0.01, run: () => this.host.resetZoom(this.view) },
+					{ label: "+", active: false, run: () => this.host.zoomIn(this.view) },
+				]);
 				this.subtitle(el, "Page boundary guides");
 				this.segmented(
 					el,
@@ -831,6 +874,72 @@ export class InkToolbar {
 						run: () => set({ pageGuide: f }),
 					})),
 				);
+				break;
+			case "ruler":
+				this.title(el, "Lineal & Zeichengeräte");
+				this.segmented(el, [
+					{
+						label: "Aus",
+						active: !s.ruler && !s.setSquare && !s.compass,
+						run: () => {
+							this.closePopover();
+							set({ ruler: false, setSquare: false, compass: false });
+						},
+					},
+					{
+						label: "Lineal",
+						active: s.ruler,
+						run: () => set({ tool: "pen", penShape: "freehand", ruler: true, setSquare: false, compass: false, inkVisible: true }),
+					},
+					{
+						label: "Geodreieck",
+						active: s.setSquare,
+						run: () => set({ tool: "pen", penShape: "freehand", ruler: false, setSquare: true, compass: false, inkVisible: true }),
+					},
+					{
+						label: "Zirkel",
+						active: s.compass,
+						run: () => set({ tool: "pen", penShape: "freehand", ruler: false, setSquare: false, compass: true, inkVisible: true }),
+					},
+				]);
+				if (s.ruler || s.setSquare) {
+					const angle = s.ruler ? s.rulerAngle : s.setSquareAngle;
+					const setAngle = (next: number) => set(s.ruler ? { rulerAngle: next } : { setSquareAngle: next });
+					this.segmented(
+						el,
+						[
+							{ label: "0°", active: Math.round(angle) === 0, run: () => setAngle(0) },
+							{ label: "30°", active: Math.round(angle) === 30, run: () => setAngle(30) },
+							{ label: "45°", active: Math.round(angle) === 45, run: () => setAngle(45) },
+							{ label: "90°", active: Math.round(angle) === 90, run: () => setAngle(90) },
+						],
+						`Winkel (${Math.round(angle)}°)`,
+					);
+					this.segmented(el, [
+						{ label: "−15°", active: false, run: () => setAngle((angle + 345) % 360) },
+						{ label: "−5°", active: false, run: () => setAngle((angle + 355) % 360) },
+						{ label: "+5°", active: false, run: () => setAngle((angle + 5) % 360) },
+						{ label: "+15°", active: false, run: () => setAngle((angle + 15) % 360) },
+					]);
+					el.createDiv({
+						cls: "pl-pop-hint",
+						text: "Direkt auf dem Lineal ziehen zum Verschieben · am Drehgriff oder mit 2 Fingern drehen · Stift an der Kante anlegen.",
+					});
+				} else if (s.compass) {
+					this.segmented(
+						el,
+						[60, 100, 140, 180].map((radius, i) => ({
+							label: ["S", "M", "L", "XL"][i],
+							active: s.compassRadius === radius,
+							run: () => set({ compassRadius: radius }),
+						})),
+						`Radius (${Math.round((s.compassRadius / (96 / 2.54)) * 10) / 10} cm)`,
+					);
+					el.createDiv({
+						cls: "pl-pop-hint",
+						text: "Mittelpunkt verschieben · äußeren Griff ziehen für freien Radius · Stift am Kreis anlegen.",
+					});
+				}
 				break;
 			case "eraser":
 				this.title(el, "Eraser");
@@ -875,19 +984,16 @@ export class InkToolbar {
 						set({ tool: "pen", penShape: shape });
 					} })));
 				}
-				this.subtitle(el, "Drawing guides");
-				this.toggle(el, "Set square", s.setSquare, () => set(s.setSquare ? { setSquare: false } : { tool: "pen", penShape: "freehand", setSquare: true, compass: false, inkVisible: true }));
-				if (s.setSquare) {
-					this.segmented(el, [
-						{ label: "−15°", active: false, run: () => set({ setSquareAngle: (s.setSquareAngle + 345) % 360 }) },
-						{ label: `${s.setSquareAngle}°`, active: true, run: () => set({ setSquareAngle: 0 }) },
-						{ label: "+15°", active: false, run: () => set({ setSquareAngle: (s.setSquareAngle + 15) % 360 }) },
-					], "Rotate set square");
-				}
-				this.toggle(el, "Compass", s.compass, () => set(s.compass ? { compass: false } : { tool: "pen", penShape: "freehand", compass: true, setSquare: false, inkVisible: true }));
-				if (s.compass) {
-					this.segmented(el, [60, 100, 140].map((radius, i) => ({ label: ["Small", "Medium", "Large"][i], active: s.compassRadius === radius, run: () => set({ compassRadius: radius }) })), "Radius");
-				}
+				this.subtitle(el, "Lineale & Zeichengeräte");
+				this.toggle(el, "Lineal (gerade)", s.ruler, () =>
+					set(s.ruler ? { ruler: false } : { tool: "pen", penShape: "freehand", ruler: true, setSquare: false, compass: false, inkVisible: true }),
+				);
+				this.toggle(el, "Geodreieck", s.setSquare, () =>
+					set(s.setSquare ? { setSquare: false } : { tool: "pen", penShape: "freehand", ruler: false, setSquare: true, compass: false, inkVisible: true }),
+				);
+				this.toggle(el, "Zirkel", s.compass, () =>
+					set(s.compass ? { compass: false } : { tool: "pen", penShape: "freehand", ruler: false, setSquare: false, compass: true, inkVisible: true }),
+				);
 				this.subtitle(el, "Page limits (PDF preview)");
 				this.segmented(
 					el,

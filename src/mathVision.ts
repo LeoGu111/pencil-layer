@@ -13,15 +13,16 @@ import type { MathVisionProvider } from "./settings";
 export interface VisionMathOptions {
 	provider: MathVisionProvider;
 	apiKey: string;
+	geminiApiKey?: string;
 }
 
-function strokesToPngBase64(strokes: readonly Stroke[], box: BBox): string {
-	const pad = 18;
+export function strokesToPngBase64(strokes: readonly Stroke[], box: BBox): string {
+	const pad = 20;
 	const rect = {
 		x: box.minX - pad,
 		y: box.minY - pad,
-		w: Math.max(40, box.maxX - box.minX + pad * 2),
-		h: Math.max(40, box.maxY - box.minY + pad * 2),
+		w: Math.max(48, box.maxX - box.minX + pad * 2),
+		h: Math.max(48, box.maxY - box.minY + pad * 2),
 	};
 	const canvas = renderInkCanvas(
 		{
@@ -48,6 +49,7 @@ async function callGemini(base64Png: string, apiKey: string): Promise<string> {
 		url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
+		throw: false,
 		body: JSON.stringify({
 			contents: [
 				{
@@ -60,6 +62,9 @@ async function callGemini(base64Png: string, apiKey: string): Promise<string> {
 			generationConfig: { temperature: 0 },
 		}),
 	});
+	if (res.status < 200 || res.status >= 300) {
+		throw new Error(`Gemini Vision HTTP ${res.status}`);
+	}
 	const json = res.json as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
 	const text = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 	return cleanVisionLatexResponse(text);
@@ -73,6 +78,7 @@ async function callOpenAI(base64Png: string, apiKey: string): Promise<string> {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${apiKey}`,
 		},
+		throw: false,
 		body: JSON.stringify({
 			model: "gpt-4o-mini",
 			temperature: 0,
@@ -87,6 +93,9 @@ async function callOpenAI(base64Png: string, apiKey: string): Promise<string> {
 			],
 		}),
 	});
+	if (res.status < 200 || res.status >= 300) {
+		throw new Error(`OpenAI Vision HTTP ${res.status}`);
+	}
 	const json = res.json as { choices?: { message?: { content?: string } }[] };
 	const text = json?.choices?.[0]?.message?.content ?? "";
 	return cleanVisionLatexResponse(text);
@@ -94,23 +103,33 @@ async function callOpenAI(base64Png: string, apiKey: string): Promise<string> {
 
 /**
  * Convert overlay-space strokes (with combined overlay bbox) into raw LaTeX. Uses configured Vision
- * API when enabled & key is present; otherwise runs the built-in offline recognizer immediately.
+ * API when enabled & key is present (auto-using the unified Gemini key when set); otherwise runs
+ * the built-in offline recognizer immediately.
  */
 export async function recognizeMathStrokes(
 	overlayStrokes: readonly Stroke[],
 	box: BBox,
 	opts: VisionMathOptions,
-): Promise<string> {
-	const key = opts.apiKey.trim();
-	if (opts.provider !== "offline" && key) {
+): Promise<{ tex: string; usedVision: boolean }> {
+	const geminiKey = (opts.geminiApiKey ?? "").trim();
+	const mathKey = opts.apiKey.trim();
+	const effectiveProvider: MathVisionProvider =
+		opts.provider === "openai"
+			? "openai"
+			: opts.provider === "gemini" || (opts.provider === "offline" && geminiKey.length > 0)
+				? "gemini"
+				: "offline";
+	const key = effectiveProvider === "gemini" ? mathKey || geminiKey : mathKey;
+
+	if (effectiveProvider !== "offline" && key) {
 		try {
 			const png = strokesToPngBase64(overlayStrokes, box);
-			const out = opts.provider === "gemini" ? await callGemini(png, key) : await callOpenAI(png, key);
-			if (out) return out;
+			const out = effectiveProvider === "gemini" ? await callGemini(png, key) : await callOpenAI(png, key);
+			if (out) return { tex: out, usedVision: true };
 		} catch (err) {
 			console.warn("[pencil-layer] Vision LaTeX request failed, falling back to offline recognizer", err);
-			new Notice("Vision LaTeX API failed — using offline recognizer");
+			new Notice("Gemini/Vision API fehlgeschlagen — Offline-Erkennung wird genutzt.");
 		}
 	}
-	return recognizeMathFromStrokes(overlayStrokes);
+	return { tex: recognizeMathFromStrokes(overlayStrokes), usedVision: false };
 }

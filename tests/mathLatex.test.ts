@@ -54,4 +54,22 @@ describe("mathLatex", () => {
 		expect(formatLatexFormula("\\frac{1}{2}", "inline")).toBe("$\\frac{1}{2}$");
 		expect(cleanVisionLatexResponse("```latex\n$$a^2 + b^2 = c^2$$\n```")).toBe("a^2 + b^2 = c^2");
 	});
+
+	it("recognizes German handwriting variants (2-stroke 4, barred 7, \\pm, \\le)", () => {
+		// 2-stroke '4': L-shape + vertical stem
+		const fourL = mkStroke([[20, 10], [10, 36], [38, 36]]);
+		const fourV = mkStroke([[30, 14], [30, 52]]);
+		expect(recognizeMathFromStrokes([fourL, fourV])).toBe("4");
+
+		// German barred '7': 7 + horizontal crossbar
+		const sevenMain = mkStroke([[60, 10], [90, 10], [70, 52]]);
+		const sevenBar = mkStroke([[66, 30], [88, 30]]);
+		expect(recognizeMathFromStrokes([sevenMain, sevenBar])).toBe("7");
+
+		// \pm: '+' over '-'
+		const pmH1 = mkStroke([[110, 24], [134, 24]]);
+		const pmV = mkStroke([[122, 12], [122, 36]]);
+		const pmH2 = mkStroke([[110, 44], [134, 44]]);
+		expect(recognizeMathFromStrokes([pmH1, pmV, pmH2])).toBe("\\pm");
+	});
 });

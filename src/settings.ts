@@ -16,9 +16,11 @@ import { DOC_FONTS, DocFont, EXPORT_STYLES, ExportStyle } from "./docStyle";
 import { PencilGestureAction, sanitizePencilGestureAction } from "./pencilGestures";
 import type { MathDelimiters, MathVisionProvider } from "./mathLatex";
 import { PAGE_GUIDE_FORMATS, PageGuideFormat } from "./pageGuides";
+import type { GeminiModel } from "./aiAssistant";
 
 export type { MathDelimiters, MathVisionProvider } from "./mathLatex";
 export type { PageGuideFormat } from "./pageGuides";
+export type { GeminiModel } from "./aiAssistant";
 
 export type ActiveTool = Tool | "eraser" | "lasso";
 /** Pen presets. "dashed" was "dotted" before Stage A2 (migrated on load). */
@@ -118,6 +120,10 @@ export interface LocalSettings {
 	 */
 	penDevice: boolean;
 	penShape: DrawShape;
+	/** Straight ruler (Lineal) guide active on canvas. */
+	ruler: boolean;
+	/** Straight ruler rotation angle in degrees [0, 360). */
+	rulerAngle: number;
 	setSquare: boolean;
 	setSquareAngle: number;
 	compass: boolean;
@@ -132,6 +138,10 @@ export interface LocalSettings {
 	mathProvider: MathVisionProvider;
 	/** Optional per-device API key for Vision-LLM math recognition (never synced to vault). */
 	mathApiKey: string;
+	/** Unified per-device Google Gemini API key for the in-app AI Assistant and Gemini Vision LaTeX. */
+	geminiApiKey: string;
+	/** Selected Google Gemini model for the in-app AI Assistant. */
+	geminiModel: GeminiModel;
 	/** Visual sheet boundary guides in editor (A4, A3, Letter, or off) matching PDF print dimensions. */
 	pageGuide: PageGuideFormat;
 	/**
@@ -151,6 +161,8 @@ export const LOCAL_KEYS: readonly (keyof LocalSettings)[] = [
 	"toolbarCollapsed",
 	"toolbarEdge",
 	"penShape",
+	"ruler",
+	"rulerAngle",
 	"setSquare",
 	"setSquareAngle",
 	"compass",
@@ -160,6 +172,8 @@ export const LOCAL_KEYS: readonly (keyof LocalSettings)[] = [
 	"mathDelimiters",
 	"mathProvider",
 	"mathApiKey",
+	"geminiApiKey",
+	"geminiModel",
 	"pageGuide",
 	"eraserMode",
 	"eraserSize",
@@ -279,6 +293,8 @@ export function defaultLocal(_isMobile: boolean): LocalSettings {
 		toolbarCollapsed: false,
 		toolbarEdge: "bottom",
 		penShape: "freehand",
+		ruler: false,
+		rulerAngle: 0,
 		setSquare: false,
 		setSquareAngle: 0,
 		compass: false,
@@ -288,6 +304,8 @@ export function defaultLocal(_isMobile: boolean): LocalSettings {
 		mathDelimiters: "auto",
 		mathProvider: "offline",
 		mathApiKey: "",
+		geminiApiKey: "",
+		geminiModel: "gemini-2.5-flash",
 		pageGuide: "A4",
 		eraserMode: "stroke",
 		eraserSize: "m",
@@ -310,6 +328,7 @@ const ERASER_MODES: readonly EraserMode[] = ["stroke", "precise"];
 const ERASER_SIZES: readonly EraserSize[] = ["s", "m", "l"];
 const MATH_DELIMITERS: readonly MathDelimiters[] = ["auto", "inline", "block"];
 const MATH_PROVIDERS: readonly MathVisionProvider[] = ["offline", "gemini", "openai"];
+const GEMINI_MODEL_VALUES: readonly GeminiModel[] = ["gemini-2.5-flash", "gemini-2.5-pro"];
 const LASSO_FILTERS: readonly LassoFilter[] = ["both", "pen", "highlighter"];
 const SELECT_MODES: readonly SelectMode[] = ["rect", "lasso"];
 
@@ -431,18 +450,23 @@ export function sanitizeLocal(raw: unknown, isMobile: boolean): LocalSettings {
 		toolbarCollapsed: bool(r.toolbarCollapsed, d.toolbarCollapsed),
 		toolbarEdge: oneOf(EDGES, r.toolbarEdge, d.toolbarEdge),
 		penShape: oneOf(DRAW_SHAPES, r.penShape, d.penShape),
-		setSquare: r.compass !== true && bool(r.setSquare, d.setSquare),
+		ruler: r.compass !== true && r.setSquare !== true && bool(r.ruler, d.ruler),
+		rulerAngle: typeof r.rulerAngle === "number" && Number.isFinite(r.rulerAngle)
+			? ((Math.round(r.rulerAngle * 2) / 2 % 360) + 360) % 360 : d.rulerAngle,
+		setSquare: r.compass !== true && r.ruler !== true && bool(r.setSquare, d.setSquare),
 		setSquareAngle: typeof r.setSquareAngle === "number" && Number.isFinite(r.setSquareAngle)
-			? ((Math.round(r.setSquareAngle) % 360) + 360) % 360 : d.setSquareAngle,
+			? ((Math.round(r.setSquareAngle * 2) / 2 % 360) + 360) % 360 : d.setSquareAngle,
 		compass: bool(r.compass, d.compass),
 		compassRadius: typeof r.compassRadius === "number" && Number.isFinite(r.compassRadius)
-			? Math.max(40, Math.min(160, Math.round(r.compassRadius))) : d.compassRadius,
+			? Math.max(40, Math.min(200, Math.round(r.compassRadius))) : d.compassRadius,
 		mathMode: bool(r.mathMode, d.mathMode),
 		mathAutoDelayMs: typeof r.mathAutoDelayMs === "number" && Number.isFinite(r.mathAutoDelayMs)
 			? Math.max(600, Math.min(3500, Math.round(r.mathAutoDelayMs))) : d.mathAutoDelayMs,
 		mathDelimiters: oneOf(MATH_DELIMITERS, r.mathDelimiters, d.mathDelimiters),
 		mathProvider: oneOf(MATH_PROVIDERS, r.mathProvider, d.mathProvider),
 		mathApiKey: typeof r.mathApiKey === "string" ? r.mathApiKey : d.mathApiKey,
+		geminiApiKey: typeof r.geminiApiKey === "string" ? r.geminiApiKey : d.geminiApiKey,
+		geminiModel: oneOf(GEMINI_MODEL_VALUES, r.geminiModel, d.geminiModel),
 		pageGuide: oneOf(PAGE_GUIDE_FORMATS, r.pageGuide, d.pageGuide),
 		eraserMode: oneOf(ERASER_MODES, r.eraserMode, d.eraserMode),
 		eraserSize: oneOf(ERASER_SIZES, r.eraserSize, d.eraserSize),

@@ -35,10 +35,18 @@ export interface PageGuideMetrics {
 
 export interface PageGuideLayout {
 	metrics: PageGuideMetrics;
+	/** Total number of sheets currently spanned (>= 1). */
+	pageCount: number;
+	/** Total height covered by the full sheet stack (`pageCount * metrics.height`). */
+	totalHeight: number;
 	/** Vertical page break Y coordinates (`pageH`, `2 * pageH`, ...). */
 	horizontalBreaks: number[];
-	/** Width covered by horizontal rules. */
+	/** Sheet width (`metrics.width`). */
+	sheetWidth: number;
+	/** Width covered by horizontal rules (clamped to `metrics.width` when wider, else `overlayWidth`). */
 	guideWidth: number;
+	/** Visible X position for page labels (always visible even when sheet exceeds viewport). */
+	labelRightX: number;
 	/** Shaded overflow start X when canvas is wider than the sheet (`metrics.width`), else `null`. */
 	overflowX: number | null;
 	overflowWidth: number;
@@ -77,21 +85,54 @@ export function nextPageGuide(current: PageGuideFormat): PageGuideFormat {
 	return PAGE_GUIDE_FORMATS[(idx + 1) % PAGE_GUIDE_FORMATS.length];
 }
 
-/** Compute dashed guide coordinates for the editor overlay dimensions. */
-export function buildPageGuideLayout(format: PageGuideFormat, overlayWidth: number, overlayHeight: number): PageGuideLayout | null {
+/**
+ * Compute required bottom padding (px) for `.cm-content` so even completely blank notes can be
+ * scrolled comfortably across pages and below existing ink.
+ */
+export function computeCanvasBottomPadding(opts: {
+	format: PageGuideFormat;
+	docHeight: number;
+	viewportHeight: number;
+	lowestInkY: number;
+	extraPages: number;
+}): number {
+	const metrics = pageGuideMetrics(opts.format);
+	const pageH = metrics ? metrics.height : Math.max(760, Math.round(opts.viewportHeight || 900));
+	const docH = Math.max(0, opts.docHeight);
+	const minPages = Math.max(2, opts.extraPages);
+	const inkPages = opts.lowestInkY > 0 ? Math.ceil((opts.lowestInkY + pageH * 0.65) / pageH) : 0;
+	const targetTotalH = Math.max(minPages * pageH + 120, inkPages * pageH + 120, docH + Math.round(pageH * 0.85));
+	return Math.max(Math.round(pageH * 0.85), Math.ceil(targetTotalH - docH));
+}
+
+/** Compute complete sheet frame & dashed break coordinates for the editor overlay dimensions. */
+export function buildPageGuideLayout(
+	format: PageGuideFormat,
+	overlayWidth: number,
+	overlayHeight: number,
+	visibleWidth?: number,
+): PageGuideLayout | null {
 	const metrics = pageGuideMetrics(format);
 	if (!metrics) return null;
 	const h = metrics.height;
-	const horizontalBreaks: number[] = [];
 	const maxBreaks = 60;
+	const horizontalBreaks: number[] = [];
 	for (let y = h; y <= Math.max(overlayHeight + 40, h) && horizontalBreaks.length < maxBreaks; y += h) {
 		horizontalBreaks.push(y);
 	}
+	const pageCount = Math.max(1, horizontalBreaks.length);
+	const totalHeight = Math.max(overlayHeight, horizontalBreaks[horizontalBreaks.length - 1] ?? h);
 	const overflow = overlayWidth > metrics.width + 2;
+	const effectiveVisible = visibleWidth && visibleWidth > 40 ? visibleWidth : overlayWidth;
+	const labelRightX = Math.max(110, Math.min(metrics.width, effectiveVisible) - 8);
 	return {
 		metrics,
+		pageCount,
+		totalHeight,
 		horizontalBreaks,
+		sheetWidth: metrics.width,
 		guideWidth: overflow ? metrics.width : overlayWidth,
+		labelRightX,
 		overflowX: overflow ? metrics.width : null,
 		overflowWidth: overflow ? overlayWidth - metrics.width : 0,
 	};
