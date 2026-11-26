@@ -481,9 +481,9 @@ export class InkView implements PluginValue {
 		view.contentDOM.addEventListener("copy", this.onCopyCutCapture, true);
 		view.contentDOM.addEventListener("cut", this.onCopyCutCapture, true);
 		sd.addEventListener("pointermove", this.onPointerMove, cap);
-		sd.addEventListener("pointerup", this.onPointerUp, cap);
-		sd.addEventListener("pointercancel", this.onPointerUp, cap);
-		sd.addEventListener("lostpointercapture", this.onPointerUp, cap);
+		sd.addEventListener("pointerup", this.onPointerEnd, cap);
+		sd.addEventListener("pointercancel", this.onPointerEnd, cap);
+		sd.addEventListener("lostpointercapture", this.onPointerEnd, cap);
 		sd.addEventListener("pointerleave", this.onPointerLeave);
 		sd.addEventListener("touchstart", this.onTouch, capActive);
 		sd.addEventListener("touchmove", this.onTouch, capActive);
@@ -548,11 +548,11 @@ export class InkView implements PluginValue {
 		this.view.contentDOM.removeEventListener("copy", this.onCopyCutCapture, true);
 		this.view.contentDOM.removeEventListener("cut", this.onCopyCutCapture, true);
 		sd.removeEventListener("pointermove", this.onPointerMove, true);
-		sd.removeEventListener("pointerup", this.onPointerUp, true);
-		sd.removeEventListener("pointercancel", this.onPointerUp, true);
+		sd.removeEventListener("pointerup", this.onPointerEnd, true);
+		sd.removeEventListener("pointercancel", this.onPointerEnd, true);
 		sd.removeEventListener("pointerleave", this.onPointerLeave);
 		sd.classList.remove("pl-pen-near");
-		sd.removeEventListener("lostpointercapture", this.onPointerUp, true);
+		sd.removeEventListener("lostpointercapture", this.onPointerEnd, true);
 		sd.removeEventListener("touchstart", this.onTouch, true);
 		sd.removeEventListener("touchmove", this.onTouch, true);
 		sd.removeEventListener("touchend", this.onTouch, true);
@@ -1870,11 +1870,12 @@ export class InkView implements PluginValue {
 		if (a.kind !== "erase") this.scheduleLive();
 	};
 
-	private readonly onPointerUp = (e: PointerEvent): void => {
+	private readonly onPointerEnd = (e: PointerEvent): void => {
+		const completed = e.type === "pointerup";
 		const bt = this.belowTap;
 		if (bt && e.pointerId === bt.id) {
 			this.belowTap = null;
-			if (e.type === "pointerup" && performance.now() - bt.t < FINGER_TAP_MS * 2 && Math.hypot(e.clientX - bt.x, e.clientY - bt.y) < FINGER_TAP_MOVE) {
+			if (completed && performance.now() - bt.t < FINGER_TAP_MS * 2 && Math.hypot(e.clientX - bt.x, e.clientY - bt.y) < FINGER_TAP_MOVE) {
 				this.openBelow(this.view.state.doc.lines);
 			}
 		}
@@ -1882,7 +1883,7 @@ export class InkView implements PluginValue {
 		if (ft && e.pointerId === ft.id) {
 			this.fingerTap = null;
 			if (
-				e.type === "pointerup" &&
+				completed &&
 				performance.now() - ft.t < FINGER_TAP_MS &&
 				Math.hypot(e.clientX - ft.x, e.clientY - ft.y) < FINGER_TAP_MOVE
 			) {
@@ -1894,11 +1895,11 @@ export class InkView implements PluginValue {
 		// Moving the implicit (touch/pen) capture from the hit element to scrollDOM fires a
 		// lostpointercapture on that element which bubbles here — that is not the end of the stroke.
 		if (e.type === "lostpointercapture" && e.target !== this.view.scrollDOM) return;
-		if (e.type !== "lostpointercapture") {
-			e.preventDefault();
-			e.stopPropagation();
-		}
-		this.active = null;
+		if (completed) e.preventDefault();
+		if (e.type !== "lostpointercapture") e.stopPropagation();
+		// A cancellation discards the preview and leaves any earlier tap pending.
+		if (completed) this.active = null;
+		else this.cancelActive();
 		this.suppressUntil = performance.now() + SUPPRESS_MS;
 		try {
 			if (this.view.scrollDOM.hasPointerCapture(e.pointerId)) this.view.scrollDOM.releasePointerCapture(e.pointerId);
@@ -1909,6 +1910,7 @@ export class InkView implements PluginValue {
 			window.cancelAnimationFrame(this.raf);
 			this.raf = 0;
 		}
+		if (!completed) return;
 		if (a.kind === "drag") {
 			this.commitDrag(a);
 			return;
