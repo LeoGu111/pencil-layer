@@ -65,6 +65,7 @@ import { SMOOTHING_LEVELS } from "./smoothing";
 import { blockStylusTouch, onTap } from "./tap";
 import type { ExportChoice } from "./exportOnce";
 import { otherStyle, styleExportLabel } from "./docStyle";
+import { PAGE_GUIDE_LABELS, PageGuideFormat } from "./pageGuides";
 
 export interface ToolbarHost {
 	getSettings(): PencilSettings;
@@ -150,6 +151,7 @@ export class InkToolbar {
 	private readonly redoBtn: HTMLElement;
 	private readonly moreBtn: HTMLElement;
 	private readonly geometryBtn: HTMLElement;
+	private readonly mathBtn: HTMLElement;
 	/** Stage M: the separator after the options area (where `optionsEl` returns from a popover). */
 	private readonly optionsEndSep: HTMLElement;
 	/** [Stage F] slim desktop variant: Select tool and Show/Hide ink buttons. */
@@ -223,6 +225,15 @@ export class InkToolbar {
 		this.geometryBtn.addClasses(["pl-tool", "pl-full-only"]);
 		this.geometryBtn.setAttribute("aria-haspopup", "menu");
 		this.geometryBtn.setAttribute("aria-expanded", "false");
+		this.mathBtn = this.button(tools, null, "Formula mode: handwrite math → LaTeX", () => {
+			const next = !this.host.getSettings().mathMode;
+			this.host.updateSettings({
+				mathMode: next,
+				...(next && this.host.getSettings().tool !== "pen" ? { tool: "pen" } : {}),
+			});
+		});
+		this.mathBtn.addClasses(["pl-tool", "pl-full-only"]);
+		this.mathBtn.createSpan({ cls: "pl-fx-badge", text: "fx" });
 		// [Stage F] desktop Select tool (slim variant only).
 		this.selectBtn = this.button(tools, SELECT_ICON, SELECT_OFF_LABEL, () => {
 			if (this.host.isDeskSelecting()) {
@@ -292,6 +303,7 @@ export class InkToolbar {
 			this.closePopover();
 		}
 		this.geometryBtn.toggleClass("is-active", s.setSquare || s.compass || (s.tool === "pen" && s.penShape !== "freehand"));
+		this.mathBtn.toggleClass("is-active", s.mathMode);
 		for (const [tool, b] of this.toolBtns) {
 			b.toggleClass("is-active", tool === s.tool);
 			b.toggleClass("is-open", tool === this.popoverKind);
@@ -802,6 +814,23 @@ export class InkToolbar {
 						set({ toolbarPos: null, toolbarEdge: "bottom" }),
 					);
 				}
+				this.subtitle(el, "Page boundary guides");
+				this.segmented(
+					el,
+					(["off", "A4", "A4-landscape"] as PageGuideFormat[]).map((f) => ({
+						label: PAGE_GUIDE_LABELS[f],
+						active: s.pageGuide === f,
+						run: () => set({ pageGuide: f }),
+					})),
+				);
+				this.segmented(
+					el,
+					(["A3", "A3-landscape", "Letter"] as PageGuideFormat[]).map((f) => ({
+						label: PAGE_GUIDE_LABELS[f],
+						active: s.pageGuide === f,
+						run: () => set({ pageGuide: f }),
+					})),
+				);
 				break;
 			case "eraser":
 				this.title(el, "Eraser");
@@ -859,6 +888,23 @@ export class InkToolbar {
 				if (s.compass) {
 					this.segmented(el, [60, 100, 140].map((radius, i) => ({ label: ["Small", "Medium", "Large"][i], active: s.compassRadius === radius, run: () => set({ compassRadius: radius }) })), "Radius");
 				}
+				this.subtitle(el, "Page limits (PDF preview)");
+				this.segmented(
+					el,
+					(["off", "A4", "A4-landscape"] as PageGuideFormat[]).map((f) => ({
+						label: PAGE_GUIDE_LABELS[f],
+						active: s.pageGuide === f,
+						run: () => set({ pageGuide: f }),
+					})),
+				);
+				this.segmented(
+					el,
+					(["A3", "A3-landscape", "Letter"] as PageGuideFormat[]).map((f) => ({
+						label: PAGE_GUIDE_LABELS[f],
+						active: s.pageGuide === f,
+						run: () => set({ pageGuide: f }),
+					})),
+				);
 				break;
 			case "pen":
 				this.title(el, "Pen");
@@ -869,9 +915,17 @@ export class InkToolbar {
 						{ label: "Fountain", active: s.penFeel === "notes", run: () => set({ penFeel: "notes" }) },
 						{ label: "Pencil", active: s.penFeel === "pencil", run: () => set({ penFeel: "pencil" }) },
 					],
-					"Feel",
+					"Pen type",
+				);
+				this.segmented(
+					el,
+					[
+						{ label: "Marker", active: s.penFeel === "marker", run: () => set({ penFeel: "marker" }) },
+						{ label: "Calligraphy", active: s.penFeel === "calligraphy", run: () => set({ penFeel: "calligraphy" }) },
+					],
 				);
 				this.toggle(el, "Tilt shading (Neigung)", s.tiltShading, () => set({ tiltShading: !s.tiltShading }));
+				this.toggle(el, "Formula mode (auto LaTeX)", s.mathMode, () => set({ mathMode: !s.mathMode }));
 				this.segmented(
 					el,
 					SMOOTHING_LEVELS.map((l) => ({ label: SMOOTHING_LABELS[l], active: s.smoothing === l, run: () => set({ smoothing: l }) })),
@@ -953,13 +1007,21 @@ export class InkToolbar {
 							{ label: "Fountain", active: s.penFeel === "notes", run: () => set({ penFeel: "notes" }) },
 							{ label: "Pencil", active: s.penFeel === "pencil", run: () => set({ penFeel: "pencil" }) },
 						],
-						"Feel",
+						"Pen type",
+					);
+					this.segmented(
+						el,
+						[
+							{ label: "Marker", active: s.penFeel === "marker", run: () => set({ penFeel: "marker" }) },
+							{ label: "Calligraphy", active: s.penFeel === "calligraphy", run: () => set({ penFeel: "calligraphy" }) },
+						],
 					);
 					this.renderPaletteSwatches(el, PEN_COLORS, s.penColor, (c) => set({ penColor: c }));
 				} else if (s.tool === "highlighter") {
 					this.renderPaletteSwatches(el, HIGHLIGHTER_COLORS, s.highlighterColor, (c) => set({ highlighterColor: c }));
 				}
 				this.menuItem(el, "undo-2", "Undo ink", false, () => this.host.undoInk(this.view));
+				this.toggle(el, "Formula mode (auto LaTeX)", s.mathMode, () => set({ mathMode: !s.mathMode }));
 				break;
 			}
 		}

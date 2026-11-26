@@ -57,6 +57,8 @@ export function drawInk(ctx: CanvasRenderingContext2D, items: readonly RenderStr
 				if (paint.multiplyHighlighter) ctx.globalCompositeOperation = "multiply";
 			} else if (s.style === "pencil") {
 				ctx.globalAlpha = 0.78;
+			} else if (s.style === "marker") {
+				ctx.globalAlpha = 0.88;
 			}
 			if (isCenterline(s)) {
 				ctx.strokeStyle = color;

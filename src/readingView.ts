@@ -33,9 +33,12 @@ import { Row, mergeRows, rowsPath } from "./textHighlight";
 import { charNeedle, charOrigin } from "./charAnchor";
 import type { ExportOptions } from "./exportOnce";
 import { DOC_FONT_VAR, DOC_STYLE_CLASS, ExportStyle, docFontStack, inkYScale, scaleInkY } from "./docStyle";
+import { pageGuidePrintConfig } from "./pageGuides";
+import { Band, inSlice, padExtents, planSlices } from "./printSlices";
 import {
 	LineMark,
 	LineRange,
+	PRINT_PAGE_CLEARANCE,
 	alignBlocks,
 	countOccurrences,
 	elementKind,
@@ -45,6 +48,7 @@ import {
 	normalizeWithMap,
 	normalizeWs,
 	ownedRange,
+	printAreaHeight,
 	printAreaWidth,
 	rangePieces,
 	reserveSpace,
@@ -85,6 +89,7 @@ const GAP_ATTR = "data-pl-gap";
 const HOST_CLASS = "pl-reading-host";
 /** [Stage I] Spacer inside the note's last section: room for ink below the end of the note. */
 const ROOM_CLASS = "pl-reading-room";
+const ROOM_SLICE_CLASS = "pl-reading-room-slice";
 /** Legacy space block class (cleaned up if present on re-render). */
 const SPACE_CLASS = "pl-reading-space";
 
@@ -107,6 +112,8 @@ interface Layout {
 	 * hangs off (character or line) scale by it; the strokes themselves don't (docStyle.ts).
 	 */
 	yScale?: number;
+	/** Printable sheet height in px during PDF export (for clean multi-page slicing). */
+	pageHeight?: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -132,6 +139,17 @@ function strokeBottom(s: Stroke): number {
 		bottomCache.set(s, b);
 	}
 	return b;
+}
+
+const topCache = new WeakMap<Stroke, number>();
+/** Highest y of a stroke relative to its anchor line top (incl. half its width). */
+function strokeTop(s: Stroke): number {
+	let t = topCache.get(s);
+	if (t === undefined) {
+		t = (bbox(s.points)?.minY ?? 0) - s.size / 2;
+		topCache.set(s, t);
+	}
+	return t;
 }
 
 const centerCache = new WeakMap<Stroke, number>();
@@ -368,6 +386,7 @@ function paintPath(el: SVGPathElement, s: Pick<Stroke, "tool" | "style" | "size"
 	const color = inkColor(s.color, target, s.tool);
 	if (s.tool === "highlighter") el.setAttribute("opacity", HL_OPACITY);
 	else if (s.style === "pencil") el.setAttribute("opacity", "0.78");
+	else if (s.style === "marker") el.setAttribute("opacity", "0.88");
 	if (isCenterline(s)) {
 		el.setAttribute("fill", "none");
 		el.setAttribute("stroke", color);
@@ -492,7 +511,8 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 
 	let drawn = 0;
 	let inkBottom = -Infinity;
-	const addPath = (s: Stroke, d: string, y: number, x = 0): SVGPathElement | null => {
+	const placed: { s: Stroke; d: string; x: number; y: number; from: number; to: number }[] = [];
+	const addPath = (s: Stroke, d: string, y: number, x = 0, band?: Band): SVGPathElement | null => {
 		if (!d) return null;
 		const p = svgEl(doc, "path");
 		p.setAttribute("d", d);
@@ -500,6 +520,7 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 		if (y !== 0 || x !== 0) p.setAttribute("transform", `translate(${r2(x)} ${r2(y)})`);
 		paintPath(p, s, target);
 		(s.tool === "highlighter" ? gHl : gPen).appendChild(p);
+		if (band) placed.push({ s, d, x, y, ...band });
 		drawn++;
 		return p;
 	};
@@ -529,8 +550,9 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 		// Document style: text rows are shorter/taller than the editor's; keep the ink's distance
 		// from its text proportional (the stroke itself is not scaled).
 		if (lay.yScale !== undefined && lay.yScale !== 1) y = scaleInkY(y, anchorTop, strokeCenterY(s), lay.yScale, box);
-		addPath(s, pathOf(s), y, x);
-		inkBottom = Math.max(inkBottom, y + strokeBottom(s));
+		const band = { from: y + strokeTop(s), to: y + strokeBottom(s) };
+		addPath(s, pathOf(s), y, x, band);
+		inkBottom = Math.max(inkBottom, band.to);
 	}
 
 	for (const c of existing) c.remove();
@@ -539,7 +561,49 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	// Room for ink drawn in the blank lines below the block (they collapse in Reading view).
 	// The note's last section also makes room for ink drawn below the end of the note (Stage I).
 	const atEnd = range.to >= lines.length - 1;
-	setGap(el, reserveSpace(inkBottom, height, range.to - lineEnd, lh, { atEnd, pad: atEnd ? 2 : 4 }), atEnd, height);
+	const roomPx = reserveSpace(inkBottom, height, range.to - lineEnd, lh, { atEnd, pad: atEnd ? 2 : 4 });
+	if (lay.print && atEnd && lay.pageHeight && roomPx > lay.pageHeight) {
+		const extents = padExtents(placed.map((p) => ({ from: p.from - height, to: p.to - height })));
+		const plan = planSlices(roomPx, extents, { pageHeight: lay.pageHeight, firstRoom: Math.max(96, lay.pageHeight - (height % lay.pageHeight)) });
+		if (plan.slices.length > 1) {
+			const firstSlice = plan.slices[0];
+			const w = Math.max(1, Math.round(elRect.width));
+			// Clip main SVG strictly at end of slice 0 so continuation slices draw pages 2+ cleanly.
+			svg.classList.add("pl-reading-slice-svg");
+			svg.setAttribute("height", String(Math.max(1, Math.ceil(height + firstSlice.to))));
+			setGap(el, Math.ceil(firstSlice.to - firstSlice.from), true, height);
+			for (let si = 1; si < plan.slices.length; si++) {
+				const slice = plan.slices[si];
+				const sliceH = Math.max(1, Math.ceil(slice.to - slice.from));
+				const div = el.createDiv({ cls: `${ROOM_CLASS} ${ROOM_SLICE_CLASS}`, attr: { "aria-hidden": "true" } });
+				div.style.height = `${sliceH}px`;
+				const sliceSvg = svgEl(doc, "svg");
+				sliceSvg.setAttribute("class", `${SVG_CLASS} pl-reading-slice-svg`);
+				sliceSvg.setAttribute("aria-hidden", "true");
+				sliceSvg.setAttribute("width", String(w));
+				sliceSvg.setAttribute("height", String(sliceH));
+				const sgHl = svgEl(doc, "g");
+				sgHl.setAttribute("class", "pl-hl");
+				const sgPen = svgEl(doc, "g");
+				sgPen.setAttribute("class", "pl-pen");
+				sliceSvg.append(sgHl, sgPen);
+				for (const item of placed) {
+					const localBand = { from: item.from - height, to: item.to - height };
+					if (!inSlice(localBand, slice)) continue;
+					const p = svgEl(doc, "path");
+					p.setAttribute("d", item.d);
+					const ty = item.y - height - slice.from;
+					const r2 = (v: number) => Math.round(v * 100) / 100;
+					if (ty !== 0 || item.x !== 0) p.setAttribute("transform", `translate(${r2(item.x)} ${r2(ty)})`);
+					paintPath(p, item.s, target);
+					(item.s.tool === "highlighter" ? sgHl : sgPen).appendChild(p);
+				}
+				div.appendChild(sliceSvg);
+			}
+			return drawn;
+		}
+	}
+	setGap(el, roomPx, atEnd, height);
 	return drawn;
 }
 
@@ -759,7 +823,8 @@ export class ReadingInk {
 			const ink: InkFile = withInk ? loaded : { ...loaded, strokes: [] };
 			if (isEmptyInk(ink)) return;
 			await waitImages(el, 4000);
-			const cfg = this.exportSettings();
+			const rawCfg = this.exportSettings();
+			const cfg = rawCfg ?? pageGuidePrintConfig(this.host.getSettings().pageGuide);
 			// The export lays the note out in a hidden (1 px wide) window; measure at the printed
 			// width so blocks wrap as they will on paper. Restored right after measuring.
 			const page = el.parentElement;
@@ -846,25 +911,26 @@ export class ReadingInk {
 		return { blocks, hosts };
 	}
 
-	private drawHosts(container: HTMLElement, lines: readonly string[], hosts: Host[], ink: InkFile, yScale: number): void {
+	private drawHosts(container: HTMLElement, lines: readonly string[], hosts: Host[], ink: InkFile, yScale: number, pageHeight: number): void {
 		if (isEmptyInk(ink)) return;
 		if (hosts.length === 0) {
 			// No metadata: the whole note as one block (proportional placement).
-			drawSection(container, { lines, lineStart: 0, lineEnd: lines.length - 1, range: { from: 0, to: lines.length - 1 }, print: true, yScale }, ink);
+			drawSection(container, { lines, lineStart: 0, lineEnd: lines.length - 1, range: { from: 0, to: lines.length - 1 }, print: true, yScale, pageHeight }, ink);
 			return;
 		}
 		hosts.forEach((h, i) => {
 			const nextStart = i + 1 < hosts.length ? hosts[i + 1].lineStart : lines.length;
 			const range = ownedRange(lines, h.lineStart, h.lineEnd, { nextStart, isFirst: i === 0 });
-			drawSection(h.el, { lines, lineStart: h.lineStart, lineEnd: h.lineEnd, range, print: true, yScale }, ink);
+			drawSection(h.el, { lines, lineStart: h.lineStart, lineEnd: h.lineEnd, range, print: true, yScale, pageHeight }, ink);
 		});
 	}
 
-	private layoutPrint(container: HTMLElement, file: TFile, text: string, ink: InkFile, _cfg: unknown, _page: HTMLElement | null, style: ExportStyle): void {
+	private layoutPrint(container: HTMLElement, file: TFile, text: string, ink: InkFile, cfg: unknown, _page: HTMLElement | null, style: ExportStyle): void {
 		const lines = splitLines(text);
 		const { hosts } = this.printBlocks(container, file);
 		// Document style: its body text has its own line height; ink was drawn against the editor's.
 		const yScale = style === "document" ? inkYScale(lineHeightOf(container), this.editorLineHeight(file.path)) : 1;
-		this.drawHosts(container, lines, hosts, ink, yScale);
+		const pageHeight = Math.floor(printAreaHeight(cfg) - PRINT_PAGE_CLEARANCE);
+		this.drawHosts(container, lines, hosts, ink, yScale, pageHeight);
 	}
 }

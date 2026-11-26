@@ -67,8 +67,8 @@ describe("double tap", () => {
 
 	it("rejects slow, distant or long taps", () => {
 		const a = tap(100, 100, 0);
-		expect(isDoubleTap(a, tap(100, 100, 60 + 400))).toBe(false); // gap 400 ms
-		expect(isDoubleTap(a, tap(120, 100, 200))).toBe(false); // 20 px away
+		expect(isDoubleTap(a, tap(100, 100, 60 + 460))).toBe(false); // gap 460 ms
+		expect(isDoubleTap(a, tap(125, 100, 200))).toBe(false); // 25 px away
 		expect(isDoubleTap(a, tap(100, 100, 200, 300))).toBe(false); // second is a press
 		expect(isDoubleTap(tap(100, 100, 0, 60, 10), tap(100, 100, 200))).toBe(false); // first was a stroke
 	});

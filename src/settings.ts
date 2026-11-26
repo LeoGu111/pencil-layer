@@ -14,12 +14,17 @@ import { SMOOTHING_LEVELS, SmoothingLevel } from "./smoothing";
 import { DRAW_SHAPES, DrawShape, SNAP_HOLD_MS } from "./shapes";
 import { DOC_FONTS, DocFont, EXPORT_STYLES, ExportStyle } from "./docStyle";
 import { PencilGestureAction, sanitizePencilGestureAction } from "./pencilGestures";
+import type { MathDelimiters, MathVisionProvider } from "./mathLatex";
+import { PAGE_GUIDE_FORMATS, PageGuideFormat } from "./pageGuides";
+
+export type { MathDelimiters, MathVisionProvider } from "./mathLatex";
+export type { PageGuideFormat } from "./pageGuides";
 
 export type ActiveTool = Tool | "eraser" | "lasso";
 /** Pen presets. "dashed" was "dotted" before Stage A2 (migrated on load). */
 export type PenPreset = "thin" | "dashed" | "thick";
 export type HighlighterWidth = "normal" | "wide";
-export type PenFeel = "ball" | "notes" | "pencil";
+export type PenFeel = "ball" | "notes" | "pencil" | "marker" | "calligraphy";
 /** Stage E eraser: "stroke" removes whole strokes, "precise" erases only the part touched. */
 export type EraserMode = "stroke" | "precise";
 export type EraserSize = "s" | "m" | "l";
@@ -117,6 +122,18 @@ export interface LocalSettings {
 	setSquareAngle: number;
 	compass: boolean;
 	compassRadius: number;
+	/** Formula mode: handwrite math equations and automatically convert them to LaTeX after a short pause. */
+	mathMode: boolean;
+	/** Pause after last formula stroke before auto-converting to LaTeX (ms). */
+	mathAutoDelayMs: number;
+	/** Delimiters for generated formulas (`auto` uses `$$` for fractions/roots/integrals, `$` inline). */
+	mathDelimiters: MathDelimiters;
+	/** Recognizer backend (`offline` built-in, or optional `gemini` / `openai` Vision API). */
+	mathProvider: MathVisionProvider;
+	/** Optional per-device API key for Vision-LLM math recognition (never synced to vault). */
+	mathApiKey: string;
+	/** Visual sheet boundary guides in editor (A4, A3, Letter, or off) matching PDF print dimensions. */
+	pageGuide: PageGuideFormat;
 	/**
 	 * Per-device settings schema version. 2 (Stage F): the desktop toolbar (now the slim Select
 	 * variant) is shown by default — see `sanitizeLocal`.
@@ -138,6 +155,12 @@ export const LOCAL_KEYS: readonly (keyof LocalSettings)[] = [
 	"setSquareAngle",
 	"compass",
 	"compassRadius",
+	"mathMode",
+	"mathAutoDelayMs",
+	"mathDelimiters",
+	"mathProvider",
+	"mathApiKey",
+	"pageGuide",
 	"eraserMode",
 	"eraserSize",
 	"eraseHighlighterOnly",
@@ -185,7 +208,7 @@ export const DEFAULT_HOLD_MS = SNAP_HOLD_MS;
 /** Hold-delay choices offered in the pen popover (ms). */
 export const HOLD_MS_CHOICES: readonly number[] = [300, 500, 800, 1200];
 /** Current settings schema version (see `SyncedSettings.settingsVersion`). */
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
 
 /** Precise-eraser radius (px) per size. The stroke eraser always uses `STROKE_ERASER_RADIUS`. */
 export const ERASER_RADII: Readonly<Record<EraserSize, number>> = { s: 5, m: 10, l: 20 };
@@ -231,7 +254,7 @@ export const DEFAULT_SYNCED: Readonly<SyncedSettings> = {
 	doubleTapEraser: false,
 	doubleTapAction: "eraser",
 	squeezeAction: "palette",
-	scribbleErase: false,
+	scribbleErase: true,
 	smoothing: "medium",
 	inkFolder: DEFAULT_INK_FOLDER,
 	screenshotFolder: DEFAULT_SCREENSHOT_FOLDER,
@@ -260,6 +283,12 @@ export function defaultLocal(_isMobile: boolean): LocalSettings {
 		setSquareAngle: 0,
 		compass: false,
 		compassRadius: 100,
+		mathMode: false,
+		mathAutoDelayMs: 1200,
+		mathDelimiters: "auto",
+		mathProvider: "offline",
+		mathApiKey: "",
+		pageGuide: "A4",
 		eraserMode: "stroke",
 		eraserSize: "m",
 		eraseHighlighterOnly: false,
@@ -275,10 +304,12 @@ export function defaultLocal(_isMobile: boolean): LocalSettings {
 const TOOLS: readonly ActiveTool[] = ["pen", "highlighter", "eraser", "lasso"];
 const PRESETS: readonly PenPreset[] = ["thin", "dashed", "thick"];
 const HL_WIDTHS: readonly HighlighterWidth[] = ["normal", "wide"];
-const FEELS: readonly PenFeel[] = ["ball", "notes", "pencil"];
+const FEELS: readonly PenFeel[] = ["ball", "notes", "pencil", "marker", "calligraphy"];
 const EDGES: readonly ToolbarEdge[] = ["top", "bottom", "left", "right"];
 const ERASER_MODES: readonly EraserMode[] = ["stroke", "precise"];
 const ERASER_SIZES: readonly EraserSize[] = ["s", "m", "l"];
+const MATH_DELIMITERS: readonly MathDelimiters[] = ["auto", "inline", "block"];
+const MATH_PROVIDERS: readonly MathVisionProvider[] = ["offline", "gemini", "openai"];
 const LASSO_FILTERS: readonly LassoFilter[] = ["both", "pen", "highlighter"];
 const SELECT_MODES: readonly SelectMode[] = ["rect", "lasso"];
 
@@ -406,6 +437,13 @@ export function sanitizeLocal(raw: unknown, isMobile: boolean): LocalSettings {
 		compass: bool(r.compass, d.compass),
 		compassRadius: typeof r.compassRadius === "number" && Number.isFinite(r.compassRadius)
 			? Math.max(40, Math.min(160, Math.round(r.compassRadius))) : d.compassRadius,
+		mathMode: bool(r.mathMode, d.mathMode),
+		mathAutoDelayMs: typeof r.mathAutoDelayMs === "number" && Number.isFinite(r.mathAutoDelayMs)
+			? Math.max(600, Math.min(3500, Math.round(r.mathAutoDelayMs))) : d.mathAutoDelayMs,
+		mathDelimiters: oneOf(MATH_DELIMITERS, r.mathDelimiters, d.mathDelimiters),
+		mathProvider: oneOf(MATH_PROVIDERS, r.mathProvider, d.mathProvider),
+		mathApiKey: typeof r.mathApiKey === "string" ? r.mathApiKey : d.mathApiKey,
+		pageGuide: oneOf(PAGE_GUIDE_FORMATS, r.pageGuide, d.pageGuide),
 		eraserMode: oneOf(ERASER_MODES, r.eraserMode, d.eraserMode),
 		eraserSize: oneOf(ERASER_SIZES, r.eraserSize, d.eraserSize),
 		eraseHighlighterOnly: bool(r.eraseHighlighterOnly, d.eraseHighlighterOnly),

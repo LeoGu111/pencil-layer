@@ -117,23 +117,24 @@ export function strokeToPath(stroke: StrokeShape, opts: PathOptions = {}): strin
 		tilts.some((t) => tiltWidthMultiplier(t, style, stroke.tool) > 1.01);
 
 	if (hasTilt) {
-		const usePressure = stroke.tool === "pen" && (style === "notes" || style === "pencil");
+		const usePressure = stroke.tool === "pen" && (style === "notes" || style === "pencil" || style === "calligraphy");
 		const uniform = constantPressure(stroke.points);
-		const thinning = 0.88;
+		const thinning = style === "calligraphy" ? 0.85 : style === "marker" ? 0.25 : 0.88;
+		const baseMul = style === "marker" ? 1.85 : style === "calligraphy" ? 1.4 : 1;
 		const factors = stroke.points.map((p, i) => {
-			const pFactor = usePressure && !uniform ? 1 + 0.6 * (2 * p[2] - 1) : 1;
+			const pFactor = usePressure && !uniform ? 1 + (style === "calligraphy" ? 0.85 : 0.6) * (2 * p[2] - 1) : 1;
 			const tFactor = tiltWidthMultiplier(tilts[i] ?? 0, style, stroke.tool);
 			return pFactor * tFactor;
 		});
 		let maxFactor = 1;
 		for (const f of factors) if (f > maxFactor) maxFactor = f;
-		const effSize = (stroke.size * maxFactor) / (1 + thinning);
+		const effSize = (stroke.size * baseMul * maxFactor) / (1 + thinning);
 		const pts = stroke.points.map((p, i) => {
 			const norm = (factors[i] / maxFactor) * (1 + thinning);
 			const effP = Math.max(0, Math.min(1, 0.5 + (norm - 1) / (2 * thinning)));
 			return [p[0] + offsetX, p[1] + offsetY, effP];
 		});
-		const taper = usePressure ? stroke.size * (style === "pencil" ? 2 : 4) : false;
+		const taper = usePressure ? stroke.size * (style === "pencil" ? 2 : style === "calligraphy" ? 5 : 4) : false;
 		return outlineToPath(
 			getStroke(pts, {
 				size: effSize,
@@ -160,6 +161,34 @@ export function strokeToPath(stroke: StrokeShape, opts: PathOptions = {}): strin
 				last,
 				start: { cap: true },
 				end: { cap: true },
+			}),
+		);
+	}
+	if (style === "marker") {
+		return outlineToPath(
+			getStroke(pts, {
+				size: stroke.size * 1.9,
+				thinning: 0.14,
+				smoothing: 0.6,
+				streamline: 0.45,
+				simulatePressure: false,
+				last,
+				start: { cap: true, taper: stroke.size * 1.2 },
+				end: { cap: true, taper: stroke.size * 1.2 },
+			}),
+		);
+	}
+	if (style === "calligraphy") {
+		return outlineToPath(
+			getStroke(pts, {
+				size: stroke.size * 1.45,
+				thinning: 0.85,
+				smoothing: 0.45,
+				streamline: 0.4,
+				simulatePressure: constantPressure(stroke.points),
+				last,
+				start: { cap: false, taper: stroke.size * 5 },
+				end: { cap: false, taper: stroke.size * 5 },
 			}),
 		);
 	}

@@ -77,6 +77,8 @@ export function pointerTilt(e: PenTiltEvent): number {
 export function tiltThreshold(style?: string, tool?: string): number {
 	if (tool === "highlighter") return 38 / 90;
 	if (style === "pencil") return 22 / 90;
+	if (style === "calligraphy") return 28 / 90;
+	if (style === "marker") return 34 / 90;
 	if (style === "notes") return 32 / 90;
 	return 38 / 90;
 }
@@ -91,6 +93,8 @@ export function tiltWidthMultiplier(tilt: number, style?: string, tool?: string)
 	const t = clamp01(tilt);
 	if (tool === "highlighter") return 1 + 1.0 * smoothstep(38 / 90, 75 / 90, t);
 	if (style === "pencil") return 1 + 3.0 * smoothstep(22 / 90, 72 / 90, t);
+	if (style === "calligraphy") return 1 + 2.4 * smoothstep(28 / 90, 74 / 90, t);
+	if (style === "marker") return 1 + 1.3 * smoothstep(34 / 90, 75 / 90, t);
 	if (style === "notes") return 1 + 2.2 * smoothstep(32 / 90, 74 / 90, t);
 	return 1 + 2.0 * smoothstep(38 / 90, 75 / 90, t);
 }

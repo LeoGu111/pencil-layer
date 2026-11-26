@@ -12,6 +12,7 @@ import { InkKeys } from "./inkKeys"; // [Stage F]
 import { PdfExporter } from "./exportPdf"; // [Stage H]
 import type { ExportChoice, ExportOptions } from "./exportOnce";
 import { DocFont, ExportStyle, styleExportLabel } from "./docStyle";
+import { PAGE_GUIDE_FORMATS, PAGE_GUIDE_LABELS, PageGuideFormat, nextPageGuide } from "./pageGuides";
 import { PENCIL_GESTURE_ACTIONS, PencilGestureAction, PencilGestureDetail, resolvePencilAction, resolvePencilGesture } from "./pencilGestures";
 import {
 	ActiveTool,
@@ -19,6 +20,8 @@ import {
 	EraserMode,
 	EraserSize,
 	LassoFilter,
+	MathDelimiters,
+	MathVisionProvider,
 	PenFeel,
 	PenWidths,
 	PencilSettings,
@@ -75,8 +78,9 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 		const rawLocal = this.loadLocal();
 		this.settings = { ...sanitizeSynced(raw), ...sanitizeLocal(rawLocal, Platform.isMobile) };
 		const prevVersion = raw && typeof raw === "object" ? (raw as { settingsVersion?: unknown }).settingsVersion : undefined;
-		if (Platform.isIosApp && (raw == null || (typeof prevVersion === "number" ? prevVersion < SETTINGS_VERSION : true))) {
-			this.settings.doubleTapEraser = true;
+		if (raw == null || (typeof prevVersion === "number" ? prevVersion < SETTINGS_VERSION : true)) {
+			this.settings.scribbleErase = true;
+			if (Platform.isIosApp) this.settings.doubleTapEraser = true;
 		}
 		// [Stage F] pre-F device settings: the desktop toolbar (now the slim Select bar) is shown — persist once.
 		if (current == null || needsLocalMigration(rawLocal)) this.saveLocal();
@@ -475,6 +479,36 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 			name: "Toggle quick tool palette",
 			callback: () => this.togglePalette(),
 		});
+		this.addCommand({
+			id: "toggle-math-mode",
+			name: "Toggle formula mode (handwrite to LaTeX)",
+			callback: () => {
+				const next = !this.settings.mathMode;
+				this.updateSettings({
+					mathMode: next,
+					...(next && this.settings.tool !== "pen" ? { tool: "pen" } : {}),
+				});
+			},
+		});
+		this.addCommand({
+			id: "convert-selection-to-latex",
+			name: "Convert selected ink formula to LaTeX",
+			checkCallback: (checking) => {
+				const v = this.activeInkView();
+				if (!v || !v.hasSelection) return false;
+				if (!checking) void v.convertSelectionToLatex();
+				return true;
+			},
+		});
+		this.addCommand({
+			id: "cycle-page-guide",
+			name: "Cycle page boundary guides (A4 / A3 / Off)",
+			callback: () => {
+				const next = nextPageGuide(this.settings.pageGuide);
+				this.updateSettings({ pageGuide: next });
+				new Notice(`Page boundary guide: ${PAGE_GUIDE_LABELS[next]}`, 1800);
+			},
+		});
 		// [Stage H] one-shot: they apply to that export only ("Include ink in PDF export" stays as set).
 		const exportCmd = (id: string, name: string, choice: ExportChoice) =>
 			this.addCommand({
@@ -649,6 +683,13 @@ class PencilSettingTab extends PluginSettingTab {
 			.setDesc("Draw the ink in Obsidian's \"Export to PDF\". The commands \"Export to PDF with ink\" / \"without ink\" set this and start the export.")
 			.addToggle((t) => t.setValue(s.includeInkInPdf).onChange((v) => this.plugin.updateSettings({ includeInkInPdf: v })));
 		new Setting(containerEl)
+			.setName("Page boundary guides (A4 / A3)")
+			.setDesc("Shows dashed sheet limits (right edge and page breaks) matching PDF export dimensions so drawings stay cleanly on each page.")
+			.addDropdown((d) => {
+				for (const f of PAGE_GUIDE_FORMATS) d.addOption(f, PAGE_GUIDE_LABELS[f]);
+				return d.setValue(s.pageGuide).onChange((v) => this.plugin.updateSettings({ pageGuide: v as PageGuideFormat }));
+			});
+		new Setting(containerEl)
 			.setName("Default export style")
 			.setDesc(`Themed: the PDF looks like the note in Obsidian (theme, snippets). Document: a plain document look (white page, black text, 12 pt, plain headings), handy for handing in work. Used by Obsidian's own export and "Export PDF with / without ink"; the ⋯ menu also offers the other style ("${styleExportLabel("document")}" / "${styleExportLabel("themed")}") for one export.`)
 			.addDropdown((d) =>
@@ -682,12 +723,14 @@ class PencilSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("Pen").setHeading();
 		new Setting(containerEl)
 			.setName("Pen feel")
-			.setDesc("Ballpoint: constant width. Fountain pen: pressure and speed vary the width, soft tapered ends. Pencil: soft graphite shading that responds strongly to tilt. Dashed is always ballpoint.")
+			.setDesc("Ballpoint: constant width. Fountain pen: pressure and speed vary the width, soft tapered ends. Pencil: soft graphite shading with tilt. Marker: bold smooth felt-tip. Calligraphy: expressive high-contrast ribbon. Dashed is always ballpoint.")
 			.addDropdown((d) =>
 				d
 					.addOption("ball", "Ballpoint")
 					.addOption("notes", "Fountain pen")
 					.addOption("pencil", "Pencil")
+					.addOption("marker", "Marker")
+					.addOption("calligraphy", "Calligraphy")
 					.setValue(s.penFeel)
 					.onChange((v) => this.plugin.updateSettings({ penFeel: v as PenFeel })),
 			);
@@ -761,10 +804,58 @@ class PencilSettingTab extends PluginSettingTab {
 			});
 		new Setting(containerEl)
 			.setName("Apple Pencil Pro squeeze action")
-			.setDesc("Action when a squeeze event is forwarded to the WebView. Note: Obsidian's iPad app does not expose native iPadOS UIPencilInteraction barrel squeeze/double-tap events to plugins; you can also trigger the Quick Tool Palette via command or iPadOS Shortcuts.")
+			.setDesc("Action when a squeeze event is forwarded to the WebView. Important: Apple's iPadOS WKWebView never exposes native hardware barrel Squeeze or barrel Double-tap (UIPencilInteraction) to Obsidian JS plugins; use screen tip double-tap, toolbar buttons, or commands instead.")
 			.addDropdown((d) => {
 				for (const a of PENCIL_GESTURE_ACTIONS) d.addOption(a.value, a.label);
 				return d.setValue(s.squeezeAction).onChange((v) => this.plugin.updateSettings({ squeezeAction: v as PencilGestureAction }));
+			});
+		new Setting(containerEl).setName("Formulas (LaTeX)").setHeading();
+		new Setting(containerEl)
+			.setName("Formula mode (auto LaTeX)")
+			.setDesc("When enabled (or via the fx button on the toolbar), pausing after writing a math equation converts it into LaTeX ($...$ / $$...$$) at that spot in the note.")
+			.addToggle((t) => t.setValue(s.mathMode).onChange((v) => this.plugin.updateSettings({ mathMode: v })));
+		new Setting(containerEl)
+			.setName("Auto-convert pause (ms)")
+			.setDesc("How long after the last stroke Formula mode waits before converting (600–3500 ms, default 1200).")
+			.addText((t) => {
+				t.inputEl.type = "number";
+				t.inputEl.step = "100";
+				t.inputEl.min = "600";
+				t.inputEl.max = "3500";
+				t.setValue(String(s.mathAutoDelayMs)).onChange((v) => {
+					const n = Number(v);
+					if (Number.isFinite(n)) this.plugin.updateSettings({ mathAutoDelayMs: n });
+				});
+			});
+		new Setting(containerEl)
+			.setName("LaTeX delimiters")
+			.addDropdown((d) =>
+				d
+					.addOption("auto", "Auto ($$ for fractions/roots, $ inline)")
+					.addOption("inline", "Inline ($...$)")
+					.addOption("block", "Block ($$...$$)")
+					.setValue(s.mathDelimiters)
+					.onChange((v) => this.plugin.updateSettings({ mathDelimiters: v as MathDelimiters })),
+			);
+		new Setting(containerEl)
+			.setName("Formula recognizer (this device)")
+			.setDesc("Built-in offline recognizer works with no API key. Optional Gemini or OpenAI Vision improves complex handwritten equations.")
+			.addDropdown((d) =>
+				d
+					.addOption("offline", "Built-in offline recognizer")
+					.addOption("gemini", "Gemini Vision API")
+					.addOption("openai", "OpenAI Vision API")
+					.setValue(s.mathProvider)
+					.onChange((v) => this.plugin.updateSettings({ mathProvider: v as MathVisionProvider })),
+			);
+		new Setting(containerEl)
+			.setName("Vision API key (this device)")
+			.setDesc("Stored locally on this device only (never synced to your vault). Optional, only used when Gemini or OpenAI is selected.")
+			.addText((t) => {
+				t.inputEl.type = "password";
+				t.setPlaceholder("Paste API key");
+				t.setValue(s.mathApiKey);
+				t.onChange((v) => this.plugin.updateSettings({ mathApiKey: v }));
 			});
 		new Setting(containerEl)
 			.setName("Scribble to erase")

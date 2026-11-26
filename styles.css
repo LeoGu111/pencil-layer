@@ -1,8 +1,9 @@
 /* ---------- Ink overlay ---------- */
 
-/* Room to draw past the end of the note. */
+/* Room to draw or tap to type past the end of the note. */
 .cm-content.pencil-layer-content {
-	padding-bottom: 50vh !important;
+	min-height: 100% !important;
+	padding-bottom: 80vh !important;
 }
 
 .pencil-layer-overlay {
@@ -953,6 +954,19 @@
 	display: block;
 	height: 0;
 	pointer-events: none;
+	break-inside: auto;
+}
+.pl-reading-room-slice {
+	position: relative;
+	overflow: hidden;
+	break-before: page;
+	page-break-before: always;
+	break-inside: avoid;
+	page-break-inside: avoid;
+}
+.pl-reading-slice-svg {
+	overflow: hidden !important;
+	mix-blend-mode: multiply;
 }
 .print .markdown-preview-view:has(.pl-reading-room),
 .print .markdown-preview-view:has(.pl-reading-space) {
@@ -1508,4 +1522,36 @@ body.theme-light {
 }
 :is(#pl-doc-style, .print.pl-doc-style) .math {
 	font-size: inherit !important;
+}
+
+.pencil-layer-toolbar .pl-fx-badge,
+.pl-menu .pl-fx-badge {
+	font-family: Georgia, "Times New Roman", serif;
+	font-style: italic;
+	font-weight: 700;
+	font-size: 13px;
+	line-height: 1;
+	letter-spacing: -0.02em;
+}
+
+/* ---------- Page boundary guides (A4 / A3 / Letter) ---------- */
+.pencil-layer-overlay .pl-guides {
+	pointer-events: none;
+}
+.pencil-layer-overlay .pl-guide-line {
+	stroke: var(--text-faint, #888);
+	stroke-width: 1;
+	stroke-dasharray: 6 5;
+	opacity: 0.48;
+	shape-rendering: crispEdges;
+}
+.pencil-layer-overlay .pl-guide-overflow {
+	fill: var(--background-modifier-hover, rgba(128, 128, 128, 0.08));
+	opacity: 0.55;
+}
+.pencil-layer-overlay .pl-guide-label {
+	fill: var(--text-muted, #888);
+	font-size: 11px;
+	font-family: var(--font-interface, sans-serif);
+	opacity: 0.72;
 }

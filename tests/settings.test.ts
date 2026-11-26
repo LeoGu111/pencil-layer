@@ -244,17 +244,17 @@ describe("Stage E tool options", () => {
 });
 
 describe("Stage B settings", () => {
-	it("defaults: shape snap on (500 ms), double-tap eraser OFF, scribble erase OFF", () => {
+	it("defaults: shape snap on (500 ms), double-tap eraser OFF, scribble erase ON", () => {
 		const d = sanitizeSynced(null);
 		expect(d.shapeSnap).toBe(true);
 		expect(d.shapeHoldMs).toBe(500);
 		expect(d.doubleTapEraser).toBe(false);
-		expect(d.scribbleErase).toBe(false);
+		expect(d.scribbleErase).toBe(true);
 	});
 
 	it("migrates pre-Stage-E data.json once: double-tap off, 450 ms default → 500 ms", () => {
 		const old = sanitizeSynced({ doubleTapEraser: true, shapeHoldMs: 450 });
-		expect(old).toMatchObject({ doubleTapEraser: false, shapeHoldMs: 500, settingsVersion: 3 });
+		expect(old).toMatchObject({ doubleTapEraser: false, shapeHoldMs: 500, settingsVersion: 4 });
 		// A custom hold delay is kept.
 		expect(sanitizeSynced({ shapeHoldMs: 700 }).shapeHoldMs).toBe(700);
 		// Version 2 files keep what the user chose.
@@ -265,7 +265,7 @@ describe("Stage B settings", () => {
 		const s = sanitizeSynced({ settingsVersion: 2, shapeSnap: false, shapeHoldMs: 700, doubleTapEraser: true, scribbleErase: true, tool: "lasso" });
 		expect(s).toMatchObject({ shapeSnap: false, shapeHoldMs: 700, doubleTapEraser: true, scribbleErase: true, tool: "lasso" });
 		const bad = sanitizeSynced({ shapeSnap: "yes", shapeHoldMs: "abc", scribbleErase: 1 });
-		expect(bad).toMatchObject({ shapeSnap: true, shapeHoldMs: 500, scribbleErase: false });
+		expect(bad).toMatchObject({ shapeSnap: true, shapeHoldMs: 500, scribbleErase: true });
 	});
 
 	it("hold delay is clamped and parsed from text", () => {
@@ -342,27 +342,29 @@ describe("penDevice (desktop pen detected)", () => {
 });
 
 describe("Apple Pencil feel, tilt & gestures settings", () => {
-	it("supports pencil feel, tiltShading, doubleTapAction, and squeezeAction", () => {
+	it("supports pencil/marker/calligraphy feel, tiltShading, doubleTapAction, and squeezeAction", () => {
 		const d = sanitizeSynced(null);
-		expect(d.settingsVersion).toBe(3);
+		expect(d.settingsVersion).toBe(4);
 		expect(d.tiltShading).toBe(true);
 		expect(d.doubleTapAction).toBe("eraser");
 		expect(d.squeezeAction).toBe("palette");
 
 		const custom = sanitizeSynced({
-			settingsVersion: 3,
+			settingsVersion: 4,
 			penFeel: "pencil",
 			tiltShading: false,
 			doubleTapAction: "previous-tool",
 			squeezeAction: "undo",
 		});
 		expect(custom).toMatchObject({
-			settingsVersion: 3,
+			settingsVersion: 4,
 			penFeel: "pencil",
 			tiltShading: false,
 			doubleTapAction: "previous-tool",
 			squeezeAction: "undo",
 		});
+		expect(sanitizeSynced({ penFeel: "marker" }).penFeel).toBe("marker");
+		expect(sanitizeSynced({ penFeel: "calligraphy" }).penFeel).toBe("calligraphy");
 
 		const invalid = sanitizeSynced({
 			penFeel: "crayon",
@@ -376,5 +378,31 @@ describe("Apple Pencil feel, tilt & gestures settings", () => {
 			doubleTapAction: "eraser",
 			squeezeAction: "palette",
 		});
+	});
+
+	it("stores per-device Formula (LaTeX) and pageGuide settings cleanly in local storage", () => {
+		const def = defaultLocal(true);
+		expect(def).toMatchObject({
+			mathMode: false,
+			mathAutoDelayMs: 1200,
+			mathDelimiters: "auto",
+			mathProvider: "offline",
+			mathApiKey: "",
+			pageGuide: "A4",
+		});
+		const loc = sanitizeLocal(
+			{ mathMode: true, mathAutoDelayMs: 5000, mathDelimiters: "block", mathProvider: "gemini", mathApiKey: "secret", pageGuide: "A3-landscape" },
+			true,
+		);
+		expect(loc).toMatchObject({
+			mathMode: true,
+			mathAutoDelayMs: 3500,
+			mathDelimiters: "block",
+			mathProvider: "gemini",
+			mathApiKey: "secret",
+			pageGuide: "A3-landscape",
+		});
+		expect(sanitizeLocal({ pageGuide: "A5" }, true).pageGuide).toBe("A4");
+		expect(Object.keys(splitPatch({ mathApiKey: "k", mathMode: true, pageGuide: "A3" }).synced)).toEqual([]);
 	});
 });

@@ -19,9 +19,13 @@
  */
 import { EditorView, PluginValue, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import type { Extension, Text } from "@codemirror/state";
-import { Platform, editorInfoField, setIcon, setTooltip } from "obsidian";
+import { Notice, Platform, editorInfoField, setIcon, setTooltip } from "obsidian";
 import { InkFile, PenStyle, Point, Stroke, Tool, hashLine, isEmptyInk, newId, resolveAnchor } from "./model";
 import { BBox, bbox, dashArray, hitTestStrokeSegment, isCenterline, isDashed, strokeToPath } from "./geometry";
+import { formatLatexFormula } from "./mathLatex";
+import { recognizeMathStrokes } from "./mathVision";
+import { buildPageGuideLayout } from "./pageGuides";
+import { TapLineInfo, insertionPosForY, planTapToType } from "./tapToType";
 import {
 	CurveBuilder,
 	DASH_MIN_DISTANCE,
@@ -170,7 +174,8 @@ function paint(el: SVGPathElement, s: Pick<Stroke, "tool" | "style" | "size" | "
 	const color = cssColor(s.color, s.tool);
 	const centerline = isCenterline(s);
 	el.setCssProps({ fill: centerline ? "none" : color, stroke: centerline ? color : "" });
-	if (s.style === "pencil" && s.tool === "pen") el.setAttribute("opacity", "0.78");
+	if (s.tool === "pen" && s.style === "pencil") el.setAttribute("opacity", "0.78");
+	else if (s.tool === "pen" && s.style === "marker") el.setAttribute("opacity", "0.88");
 	else el.removeAttribute?.("opacity");
 	if (centerline) {
 		el.setAttribute("stroke-width", String(s.size));
@@ -370,7 +375,9 @@ export class InkView implements PluginValue {
 	private destroyed = false;
 
 	private readonly svg: SVGSVGElement;
+	private readonly gGuides: SVGGElement;
 	private readonly gHl: SVGGElement;
+	private pageGuideKey = "";
 	private readonly gHlLive: SVGGElement;
 	private readonly gPen: SVGGElement;
 	private readonly gPenLive: SVGGElement;
@@ -412,6 +419,12 @@ export class InkView implements PluginValue {
 	private dragT: SelectionTransform | null = null;
 	/** Finger down outside the selection: a quick tap deselects (a scroll does not). */
 	private fingerTap: { id: number; x: number; y: number; t: number } | null = null;
+	/** Non-ink tap tracking (finger or passive mouse): tap anywhere to place typing caret + keyboard. */
+	private navTap: { id: number; x: number; y: number; t: number; moved: boolean } | null = null;
+	private lastCompletedTap: { x: number; y: number; at: number } | null = null;
+	/** Buffered handwritten formula stroke IDs waiting for pause auto-conversion in Formula mode. */
+	private mathBuffer: string[] = [];
+	private mathTimer: number | null = null;
 	/** [Stage C] Highlighter strokes snapped to typed text (textHighlightView.ts). */
 	private readonly textHl: TextHighlights;
 	/** [Stage H] Ink anchored to a character of typed text (charAnchorView.ts). */
@@ -429,6 +442,7 @@ export class InkView implements PluginValue {
 	) {
 		this.svg = svgEl("svg", "pencil-layer-overlay");
 		this.svg.setAttribute("aria-hidden", "true");
+		this.gGuides = svgEl("g", "pl-guides");
 		this.gHl = svgEl("g", "pl-hl");
 		this.gHlLive = svgEl("g", "pl-hl pl-live");
 		this.gPen = svgEl("g", "pl-pen");
@@ -453,7 +467,7 @@ export class InkView implements PluginValue {
 			this.guideGrip.addEventListener(event, this.onGuideEnd);
 		}
 		this.gUi.append(this.guideOutline, this.guideGrip, this.selRect, this.selHandle, this.eraserCursor);
-		this.svg.append(this.gHl, this.gHlLive, this.gPen, this.gPenLive, this.gUi);
+		this.svg.append(this.gGuides, this.gHl, this.gHlLive, this.gPen, this.gPenLive, this.gUi);
 		view.scrollDOM.appendChild(this.svg);
 
 		const sd = view.scrollDOM;
@@ -469,6 +483,7 @@ export class InkView implements PluginValue {
 		sd.addEventListener("touchmove", this.onTouch, capActive);
 		sd.addEventListener("touchend", this.onTouch, capActive);
 		sd.addEventListener("touchcancel", this.onTouch, capActive);
+		sd.addEventListener("click", this.onEditorClick);
 		for (const t of SUPPRESSED) sd.addEventListener(t, this.onCompatMouse, capActive);
 
 		host.registerInkView(this);
@@ -531,7 +546,9 @@ export class InkView implements PluginValue {
 		sd.removeEventListener("touchmove", this.onTouch, true);
 		sd.removeEventListener("touchend", this.onTouch, true);
 		sd.removeEventListener("touchcancel", this.onTouch, true);
+		sd.removeEventListener("click", this.onEditorClick);
 		for (const t of SUPPRESSED) sd.removeEventListener(t, this.onCompatMouse, true);
+		this.clearMathBuffer();
 		if (this.raf) window.cancelAnimationFrame(this.raf);
 		if (this.switchTimer !== null) window.clearTimeout(this.switchTimer);
 		this.cancelActive();
@@ -558,6 +575,7 @@ export class InkView implements PluginValue {
 		const selecting = this.host.selectionToolActive();
 		if (this.selection && (!selecting || !s.inkVisible)) this.clearSelection();
 		if (this.menu && (!selecting || !s.inkVisible)) this.closeMenu();
+		if (!s.mathMode || s.tool !== "pen") this.clearMathBuffer();
 		this.scheduleRender();
 	}
 
@@ -855,6 +873,7 @@ export class InkView implements PluginValue {
 	private render(geo: Geometry): void {
 		if (this.destroyed) return;
 		this.applyGeometry(geo);
+		this.renderPageGuides(geo);
 		for (const el of this.pendingLive) el.remove();
 		this.pendingLive = [];
 
@@ -953,6 +972,48 @@ export class InkView implements PluginValue {
 		const settings = this.host.getSettings();
 		if (!this.guideOrigin || !settings.setSquare) return [];
 		return setSquareEdges(this.guideOrigin, settings.setSquareAngle, Math.max(30, Math.min(135, (this.geo?.width ?? 0) / 3)));
+	}
+
+	private renderPageGuides(geo: Geometry): void {
+		const fmt = this.host.getSettings().pageGuide;
+		const key = `${fmt}:${Math.round(geo.width)}x${Math.round(geo.height)}`;
+		if (key === this.pageGuideKey) return;
+		this.pageGuideKey = key;
+		this.gGuides.replaceChildren();
+		const layout = buildPageGuideLayout(fmt, geo.width, geo.height);
+		if (!layout) return;
+		const totalH = Math.max(geo.height, layout.horizontalBreaks[layout.horizontalBreaks.length - 1] ?? layout.metrics.height);
+
+		if (layout.overflowX !== null && layout.overflowWidth > 0) {
+			const shade = svgEl("rect", "pl-guide-overflow");
+			shade.setAttribute("x", String(layout.overflowX));
+			shade.setAttribute("y", "0");
+			shade.setAttribute("width", String(layout.overflowWidth));
+			shade.setAttribute("height", String(totalH));
+			this.gGuides.appendChild(shade);
+		}
+		const margin = svgEl("line", "pl-guide-line pl-guide-margin");
+		margin.setAttribute("x1", String(layout.metrics.width));
+		margin.setAttribute("y1", "0");
+		margin.setAttribute("x2", String(layout.metrics.width));
+		margin.setAttribute("y2", String(totalH));
+		this.gGuides.appendChild(margin);
+
+		layout.horizontalBreaks.forEach((y, idx) => {
+			const line = svgEl("line", "pl-guide-line pl-guide-break");
+			line.setAttribute("x1", "0");
+			line.setAttribute("y1", String(y));
+			line.setAttribute("x2", String(layout.guideWidth));
+			line.setAttribute("y2", String(y));
+			this.gGuides.appendChild(line);
+
+			const label = svgEl("text", "pl-guide-label");
+			label.setAttribute("x", String(Math.max(8, layout.guideWidth - 6)));
+			label.setAttribute("y", String(Math.max(12, y - 5)));
+			label.setAttribute("text-anchor", "end");
+			label.textContent = `${layout.metrics.label} · Seite ${idx + 1} / ${idx + 2}`;
+			this.gGuides.appendChild(label);
+		});
 	}
 
 	private renderGuide(): void {
@@ -1222,8 +1283,16 @@ export class InkView implements PluginValue {
 	};
 
 	private onOtherPointerDown(e: PointerEvent): void {
-		if (!this.selection || this.active) return;
+		if (this.active) return;
 		if (e.pointerType === "mouse" && e.button !== 0) return;
+		const canTapType =
+			(e.pointerType === "touch" || (e.pointerType === "mouse" && e.button === 0)) &&
+			!this.isInteractiveEditorTarget(e.target);
+		if (!this.selection) {
+			this.navTap = canTapType ? { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), moved: false } : null;
+			return;
+		}
+		this.navTap = null;
 		this.applyGeometry(this.readGeometry(this.view));
 		const [x, y] = this.toOverlay(e, this.svg.getBoundingClientRect());
 		const hit = this.hitSel(x, y);
@@ -1241,6 +1310,14 @@ export class InkView implements PluginValue {
 		}
 	}
 
+	/** Do not intercept clicks on links, checkboxes, fold icons, widgets, or embeds. */
+	private isInteractiveEditorTarget(target: EventTarget | null): boolean {
+		if (!(target instanceof Element)) return false;
+		return !!target.closest(
+			"a, button, input, textarea, select, label, .clickable-icon, .internal-link, .external-link, .task-list-item-checkbox, .cm-foldGutter, .callout-fold, .pl-menu, .pencil-layer-toolbar",
+		);
+	}
+
 	private capture(pointerId: number): void {
 		try {
 			this.view.scrollDOM.setPointerCapture(pointerId);
@@ -1250,6 +1327,9 @@ export class InkView implements PluginValue {
 	}
 
 	private readonly onPointerMove = (e: PointerEvent): void => {
+		if (this.navTap && e.pointerId === this.navTap.id && Math.hypot(e.clientX - this.navTap.x, e.clientY - this.navTap.y) >= 10) {
+			this.navTap.moved = true;
+		}
 		const a = this.active;
 		if (!a && e.pointerType === "mouse") this.onDeskHover(e); // [Stage F] cursor feedback
 		if (!a && e.pointerType === "pen") this.setPenNear(true);
@@ -1330,6 +1410,24 @@ export class InkView implements PluginValue {
 
 	private readonly onPointerEnd = (e: PointerEvent): void => {
 		const completed = e.type === "pointerup";
+		const nt = this.navTap;
+		if (nt && e.pointerId === nt.id) {
+			this.navTap = null;
+			if (
+				completed &&
+				!nt.moved &&
+				performance.now() - nt.t < 450 &&
+				Math.hypot(e.clientX - nt.x, e.clientY - nt.y) < 10 &&
+				e.isPrimary
+			) {
+				if (e.pointerType === "touch" && !this.view.contentDOM.contains(e.target as Node)) {
+					this.lastCompletedTap = null;
+					this.applyTapToType(e.clientX, e.clientY, e.target);
+				} else {
+					this.lastCompletedTap = { x: e.clientX, y: e.clientY, at: performance.now() };
+				}
+			}
+		}
 		const ft = this.fingerTap;
 		if (ft && e.pointerId === ft.id) {
 			this.fingerTap = null;
@@ -1623,6 +1721,10 @@ export class InkView implements PluginValue {
 		}
 		if (this.geo) this.store.setContentWidth(path, Math.round(this.geo.width));
 		this.store.addStroke(path, stroke);
+		if (a.tool === "pen" && !a.snap && settings.mathMode) {
+			this.mathBuffer.push(stroke.id);
+			this.armMathTimer();
+		}
 		if (box) {
 			const now = performance.now();
 			this.recentInk = pruneRecentInk(this.recentInk, now);
@@ -2599,6 +2701,7 @@ export class InkView implements PluginValue {
 		this.menuItem(el, "copy-plus", "Duplicate", () => this.duplicateSelection());
 		this.menuItem(el, "trash-2", "Delete", () => this.deleteSelection());
 		this.menuItem(el, "palette", "Color", () => this.setColorsOpen(true), "pl-menu-sub");
+		this.menuItem(el, "fx", "To LaTeX", () => void this.convertSelectionToLatex());
 		this.menuItem(el, "camera", "Screenshot", () => this.screenshotSelection());
 	}
 
@@ -2615,7 +2718,11 @@ export class InkView implements PluginValue {
 			cls: `pl-menu-item ${cls}`.trim(),
 			attr: { role: "menuitem", tabindex: "-1", "aria-label": label },
 		});
-		if (icon) {
+		if (icon === "fx") {
+			const span = b.createSpan({ cls: "pl-menu-icon pl-fx-badge", text: "fx" });
+			if (!span.parentElement) b.appendChild(span);
+			b.createSpan({ cls: "pl-menu-label", text: label });
+		} else if (icon) {
 			setIcon(b.createSpan({ cls: "pl-menu-icon" }), icon);
 			if (cls !== "pl-menu-back") b.createSpan({ cls: "pl-menu-label", text: label });
 		} else {
@@ -2624,6 +2731,175 @@ export class InkView implements PluginValue {
 		if (cls === "pl-menu-sub") setIcon(b.createSpan({ cls: "pl-menu-chevron" }), "chevron-right");
 		onTap(b, run);
 		return b;
+	}
+
+	// -------------------------------------------------------------------------------------------
+	// Tap anywhere to type + handwritten formulas → LaTeX
+	// -------------------------------------------------------------------------------------------
+
+	private readonly onEditorClick = (e: MouseEvent): void => {
+		const tap = this.lastCompletedTap;
+		this.lastCompletedTap = null;
+		if (!tap || performance.now() - tap.at > 400) return;
+		if (e.defaultPrevented || this.active || this.selection) return;
+		const s = this.host.getSettings();
+		if (s.mouseDraws || this.host.deskSelect() !== null) return;
+		if (this.isUiTarget(e.target) || this.isInteractiveEditorTarget(e.target)) return;
+		if (!this.view.state.selection.main.empty) return;
+		this.applyTapToType(e.clientX || tap.x, e.clientY || tap.y, e.target);
+	};
+
+	private lineInfoAt(lineNumber: number, svgRect: DOMRect, sx: number): TapLineInfo {
+		const doc = this.view.state.doc;
+		const line = doc.line(lineNumber);
+		const block = this.view.lineBlockAt(line.from);
+		const endCoords = this.view.coordsAtPos(line.to);
+		const lineEndX = endCoords ? Math.max(0, (endCoords.right - svgRect.left) / sx) : 0;
+		return { top: block.top, bottom: block.bottom, lineTo: line.to, lineEndX };
+	}
+
+	private applyTapToType(clientX: number, clientY: number, target: EventTarget | null): void {
+		if (this.destroyed) return;
+		this.applyGeometry(this.readGeometry(this.view));
+		const geo = this.geo;
+		if (!geo) return;
+		const rect = this.svg.getBoundingClientRect();
+		const sx = this.view.scaleX || 1;
+		const [tapX, tapY] = this.clientToOverlay(clientX, clientY, rect);
+		const lineH = this.view.defaultLineHeight || 24;
+		const charW = this.view.defaultCharacterWidth || 8.5;
+		const doc = this.view.state.doc;
+		const lastLine = this.lineInfoAt(doc.lines, rect, sx);
+		let lineAtTap: TapLineInfo | undefined;
+		if (tapY <= lastLine.bottom + lineH * 0.4) {
+			const block = this.view.lineBlockAtHeight(Math.max(0, tapY));
+			const line = doc.lineAt(block.from);
+			lineAtTap = this.lineInfoAt(line.number, rect, sx);
+		}
+		const plan = planTapToType({
+			docLength: doc.length,
+			lineHeight: lineH,
+			charWidth: charW,
+			tapX,
+			tapY,
+			lastLine,
+			lineAtTap,
+		});
+		if (plan) {
+			this.view.dispatch({
+				changes: { from: plan.from, to: plan.from, insert: plan.insert },
+				selection: { anchor: plan.anchor },
+				userEvent: "input",
+			});
+			this.view.focus();
+			return;
+		}
+		if (target instanceof Node && !this.view.contentDOM.contains(target)) {
+			const clampedX = rect.left + Math.max(4, Math.min(Math.max(4, geo.width - 4), tapX)) * sx;
+			const pos = this.view.posAtCoords({ x: clampedX, y: clientY }, false);
+			this.view.dispatch({ selection: { anchor: pos }, userEvent: "select.pointer" });
+			this.view.focus();
+		}
+	}
+
+	private clearMathBuffer(): void {
+		if (this.mathTimer !== null) {
+			window.clearTimeout(this.mathTimer);
+			this.mathTimer = null;
+		}
+		this.mathBuffer = [];
+	}
+
+	private armMathTimer(): void {
+		if (this.mathTimer !== null) window.clearTimeout(this.mathTimer);
+		const delay = this.host.getSettings().mathAutoDelayMs || 1200;
+		this.mathTimer = window.setTimeout(() => {
+			this.mathTimer = null;
+			void this.flushMathBuffer();
+		}, delay);
+	}
+
+	private async flushMathBuffer(): Promise<void> {
+		const path = this.path;
+		const ids = new Set(this.mathBuffer);
+		this.mathBuffer = [];
+		if (ids.size === 0 || !path || !this.store.isLoaded(path) || this.destroyed) return;
+		const ink = this.store.get(path);
+		if (!ink) return;
+		const strokes = ink.strokes.filter((s) => ids.has(s.id));
+		if (strokes.length === 0) return;
+		await this.convertStrokesToLatex(strokes);
+	}
+
+	async convertSelectionToLatex(): Promise<void> {
+		const sel = this.selection;
+		if (!sel || sel.length === 0) return;
+		const ok = await this.convertStrokesToLatex(sel);
+		if (ok) this.clearSelection();
+	}
+
+	private async convertStrokesToLatex(strokes: readonly Stroke[]): Promise<boolean> {
+		const path = this.path;
+		if (!path || !this.store.isLoaded(path) || this.destroyed || strokes.length === 0) return false;
+		const overlayStrokes: Stroke[] = [];
+		let minX = Infinity;
+		let minY = Infinity;
+		let maxX = -Infinity;
+		let maxY = -Infinity;
+		for (const s of strokes) {
+			if (s.tool === "highlighter") continue;
+			const [ox, top] = this.place(s);
+			const pts = s.points.map((p): Point => [p[0] + ox, p[1] + top, p[2]]);
+			const b = bbox(pts);
+			if (!b) continue;
+			minX = Math.min(minX, b.minX);
+			minY = Math.min(minY, b.minY);
+			maxX = Math.max(maxX, b.maxX);
+			maxY = Math.max(maxY, b.maxY);
+			overlayStrokes.push({ ...s, points: pts });
+		}
+		if (overlayStrokes.length === 0 || !Number.isFinite(minX)) return false;
+
+		const settings = this.host.getSettings();
+		const box: BBox = { minX, minY, maxX, maxY };
+		const rawTex = await recognizeMathStrokes(overlayStrokes, box, {
+			provider: settings.mathProvider,
+			apiKey: settings.mathApiKey,
+		});
+		if (this.destroyed || this.path !== path || !this.store.isLoaded(path)) return false;
+		const formatted = formatLatexFormula(rawTex, settings.mathDelimiters);
+		if (!formatted) {
+			new Notice("Could not recognize a formula in those strokes.");
+			return false;
+		}
+
+		const ink = this.store.get(path);
+		const onCanvas = new Set((ink?.strokes ?? []).map((s) => s.id));
+		const removeIds = strokes.map((s) => s.id).filter((id) => onCanvas.has(id));
+		if (removeIds.length === 0) return false;
+
+		this.store.removeStrokes(path, removeIds, newId());
+		this.applyGeometry(this.readGeometry(this.view));
+		const rect = this.svg.getBoundingClientRect();
+		const sx = this.view.scaleX || 1;
+		const doc = this.view.state.doc;
+		const lineH = this.view.defaultLineHeight || 24;
+		const lastLine = this.lineInfoAt(doc.lines, rect, sx);
+		const midY = (minY + maxY) / 2;
+		const targetLine = midY <= lastLine.bottom + lineH * 0.4
+			? doc.lineAt(this.view.lineBlockAtHeight(Math.max(0, midY)).from)
+			: doc.line(doc.lines);
+		const { prefixNewlines, from } = insertionPosForY(midY, lastLine, lineH, targetLine.to, doc.length);
+		const existingLine = doc.lineAt(from);
+		const leading = prefixNewlines > 0 ? "\n".repeat(prefixNewlines) : existingLine.text.trim().length > 0 && formatted.startsWith("$$") ? "\n" : existingLine.length > 0 ? " " : "";
+		const insert = `${leading}${formatted}`;
+		this.view.dispatch({
+			changes: { from, to: from, insert },
+			selection: { anchor: from + insert.length },
+			userEvent: "input",
+		});
+		new Notice(`LaTeX: ${formatted}`, 2500);
+		return true;
 	}
 }
 

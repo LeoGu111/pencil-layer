@@ -33,13 +33,13 @@ export type XY = [number, number];
 
 export const TAP = {
 	/** A tap is a pen contact shorter than this (ms)… */
-	maxMs: 180,
-	/** …that moved less than this (px): tolerates slight Pencil tip parallax on glass. */
-	maxMove: 6,
+	maxMs: 220,
+	/** …that moved less than this (px): tolerates Apple Pencil tip parallax on glass. */
+	maxMove: 8,
 	/** Second tap must start within this time after the first ended (ms)… */
-	maxGapMs: 340,
+	maxGapMs: 420,
 	/** …and within this distance of the first (px). */
-	maxDist: 14,
+	maxDist: 22,
 } as const;
 
 /**
@@ -47,8 +47,8 @@ export const TAP = {
  * handwriting (an i/j dot, punctuation, an umlaut) and never counts toward a double tap.
  */
 export const INK_GUARD = {
-	px: 40,
-	ms: 1500,
+	px: 28,
+	ms: 1000,
 } as const;
 
 export interface Tap {
@@ -115,8 +115,8 @@ export function isDoubleTap(first: Tap, second: Tap, recent: readonly RecentInk[
 // -------------------------------------------------------------------------------------------------
 
 export const SCRIBBLE = {
-	/** Minimum number of direction reversals (≥ 4 ⇒ at least 5 legs). */
-	minReversals: 4,
+	/** Minimum number of direction reversals (≥ 3 ⇒ at least 4 zigzag legs / strikethroughs). */
+	minReversals: 3,
 	/** The whole gesture must take at most this long (ms). */
 	maxDurationMs: 1500,
 	/** Average time per leg must be at most this (ms): scribbles are fast. */

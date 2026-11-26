@@ -238,4 +238,13 @@ describe("hitTestStroke", () => {
 		expect(hitTestStrokeSegment(pen, 50, 0, 50, 100, 5)).toBe(true);
 		expect(hitTestStrokeSegment(pen, 500, 0, 500, 100, 5)).toBe(false);
 	});
+
+	it("renders marker and calligraphy pen styles as filled outlines", () => {
+		const pts: Point[] = [[0, 0, 0.3], [20, 4, 0.7], [40, 2, 0.5]];
+		for (const style of ["marker", "calligraphy"] as const) {
+			const s = { tool: "pen" as const, size: 2, style, points: pts };
+			expect(isCenterline(s)).toBe(false);
+			expect(strokeToPath(s)).toMatch(/^M.*Z$/);
+		}
+	});
 });

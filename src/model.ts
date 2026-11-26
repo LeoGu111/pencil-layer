@@ -13,8 +13,8 @@ export type Tool = "pen" | "highlighter";
  * - "notes":  Apple Notes-style — pressure/velocity-sensitive outline via perfect-freehand.
  * Strokes saved before M2 have no style and load as "ball".
  */
-export type PenStyle = "ball" | "dashed" | "dotted" | "notes" | "pencil";
-export const PEN_STYLES: readonly PenStyle[] = ["ball", "dashed", "dotted", "notes", "pencil"];
+export type PenStyle = "ball" | "dashed" | "dotted" | "notes" | "pencil" | "marker" | "calligraphy";
+export const PEN_STYLES: readonly PenStyle[] = ["ball", "dashed", "dotted", "notes", "pencil", "marker", "calligraphy"];
 
 /**
  * Kind of a snapped shape (M2 Stage B "draw and hold"). Shapes are ordinary strokes whose points
@@ -591,7 +591,7 @@ export interface DiskInkFile {
  */
 function keepsPressure(s: Stroke): boolean {
 	const style = penStyleOf(s);
-	if ((style !== "notes" && style !== "pencil") || s.shape) return false;
+	if ((style !== "notes" && style !== "pencil" && style !== "calligraphy") || s.shape) return false;
 	const def = quant(DEFAULT_PRESSURE, P_SCALE);
 	return s.points.some((p) => quant(clamp01(p[2]), P_SCALE) !== def);
 }
