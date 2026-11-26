@@ -42,7 +42,7 @@ Ink Pages is a standalone Obsidian plugin based on [Pencil Layer](https://github
 - **Eraser.** Erases whole strokes, or only the part you touch (precise mode, three sizes). It can be limited to the highlighter. A pen's eraser end (Surface Pen, many Wacom pens) erases while you hold it.
 - **Lasso.** Select ink, then move, resize, copy, cut, paste, duplicate, delete, recolor or screenshot it, or turn it into a drawing space.
 - **Shapes.** Draw and hold to snap a stroke to a line, arrow, rectangle, triangle, polygon, ellipse or circle, right angle, polyline, arc, parabola or smooth curve. Keep the pen down to adjust it.
-- **Geometry tools.** Tap the selected pen to open its menu. Choose a shape and drag to size it, or turn on the set square and start a line close to an edge. Drag the round grip to move it and use the angle controls to rotate it.
+- **Geometry tools.** Tap the **Geometry** button (shapes icon) next to the lasso. Choose a shape and drag to size it, turn on the set square and start close to an edge, or use the compass to guide circular arcs. Move either guide by its round grip. Use the geometry menu to rotate the set square or change the compass radius.
 - **Scribble to erase** and **double-tap to toggle the eraser** (both optional).
 - **Drawing spaces.** Protected blank areas between paragraphs for diagrams. They grow as you draw near the bottom, can be resized, and move with their paragraph. Drawing below the end of a note creates one automatically.
 - **Reading view and PDF export.** Ink renders in Reading view and in Obsidian's "Export to PDF". You can export with or without ink, and tall drawings are split cleanly across pages on white paper.

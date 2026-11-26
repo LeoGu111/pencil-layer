@@ -1,4 +1,4 @@
-import type { XY } from "./shapes";
+import type { ShapeSpec, XY } from "./shapes";
 
 export type GuideEdge = readonly [XY, XY];
 
@@ -32,4 +32,40 @@ export function nearestGuideEdge(point: XY, edges: readonly GuideEdge[], toleran
 		best = edge;
 	}
 	return best;
+}
+
+export interface CompassDrag {
+	center: XY;
+	radius: number;
+	start: number;
+	lastAngle: number;
+	sweep: number;
+}
+
+const FULL_TURN = 2 * Math.PI;
+
+export function startCompassDrag(point: XY, center: XY, radius: number, tolerance: number): CompassDrag | null {
+	const x = point[0] - center[0];
+	const y = point[1] - center[1];
+	if (Math.abs(Math.hypot(x, y) - radius) >= tolerance) return null;
+	const angle = Math.atan2(y, x);
+	return { center, radius, start: angle, lastAngle: angle, sweep: 0 };
+}
+
+/** Accumulate adjacent samples so arcs can cross ±180° and still complete a full turn. */
+export function moveCompass(drag: CompassDrag, point: XY): void {
+	const x = point[0] - drag.center[0];
+	const y = point[1] - drag.center[1];
+	if (Math.hypot(x, y) < drag.radius / 4) return;
+	const angle = Math.atan2(y, x);
+	const delta = angle - drag.lastAngle;
+	const step = Math.atan2(Math.sin(delta), Math.cos(delta));
+	drag.lastAngle = angle;
+	drag.sweep = Math.max(-FULL_TURN, Math.min(FULL_TURN, drag.sweep + step));
+}
+
+export function compassShape({ center: [cx, cy], radius, start, sweep }: CompassDrag, minLength: number): ShapeSpec | null {
+	if (Math.abs(sweep) * radius < minLength) return null;
+	if (Math.abs(sweep) >= FULL_TURN - 0.035) return { kind: "circle", cx, cy, rx: radius, ry: radius, rot: 0 };
+	return { kind: "arc", cx, cy, r: radius, start, sweep };
 }

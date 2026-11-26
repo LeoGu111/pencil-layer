@@ -117,7 +117,12 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const STRIP_SCROLL_MOVE = 8;
 
 type OptionsKind = "pen" | "highlighter" | "eraser" | "lasso";
-type PopoverKind = "more" | ActiveTool | "select" | "snap";
+type PopoverKind = "more" | ActiveTool | "select" | "snap" | "geometry";
+
+const SHAPE_ROWS: [DrawShape, string][][] = [
+	[["freehand", "Freehand"], ["line", "Line"], ["arrow", "Arrow"]],
+	[["rectangle", "Rectangle"], ["ellipse", "Ellipse"], ["triangle", "Triangle"], ["circle", "Circle"]],
+];
 
 interface DragState {
 	pointerId: number;
@@ -146,6 +151,7 @@ export class InkToolbar {
 	private readonly undoBtn: HTMLElement;
 	private readonly redoBtn: HTMLElement;
 	private readonly moreBtn: HTMLElement;
+	private readonly geometryBtn: HTMLElement;
 	/** Stage M: the separator after the options area (where `optionsEl` returns from a popover). */
 	private readonly optionsEndSep: HTMLElement;
 	/** [Stage F] slim desktop variant: Select tool and Show/Hide ink buttons. */
@@ -183,13 +189,13 @@ export class InkToolbar {
 		this.el.addEventListener("mousedown", keepFocus);
 		// Pencil presses on our buttons: no Scribble / text interaction (buttons fire on pen pointerup).
 		blockStylusTouch(this.el);
-		// Touches on the toolbar never scroll or zoom the note beneath it (the color strip scrolls itself).
+		// The color strip and menus own their scroll gestures. Keep the rest of the toolbar still.
 		this.el.addEventListener(
 			"touchmove",
 			(e) => {
-				if (!(e.target as Node | null)?.instanceOf(Node) || !this.strip?.contains(e.target as Node)) {
-					if (e.cancelable) e.preventDefault();
-				}
+				const target = e.target as Node | null;
+				if (target?.instanceOf(Node) && (this.strip?.contains(target) || this.popover?.contains(target))) return;
+				if (e.cancelable) e.preventDefault();
 			},
 			{ passive: false },
 		);
@@ -215,6 +221,10 @@ export class InkToolbar {
 
 		const tools = this.barEl.createDiv({ cls: "pl-group pl-tools" });
 		for (const t of ["pen", "eraser", "highlighter", "lasso"] as const) this.toolButton(tools, t);
+		this.geometryBtn = this.button(tools, "shapes", "Geometry: shapes, set square, compass", () => this.togglePopover("geometry", this.geometryBtn));
+		this.geometryBtn.addClasses(["pl-tool", "pl-full-only"]);
+		this.geometryBtn.setAttribute("aria-haspopup", "menu");
+		this.geometryBtn.setAttribute("aria-expanded", "false");
 		// [Stage F] desktop Select tool (slim variant only).
 		this.selectBtn = this.button(tools, SELECT_ICON, SELECT_OFF_LABEL, () => {
 			if (this.host.isDeskSelecting()) {
@@ -260,6 +270,7 @@ export class InkToolbar {
 		const selecting = this.host.isDeskSelecting();
 		this.el.toggleClass("is-slim", slim);
 		if (this.popoverKind === "select" && !selecting) this.closePopover();
+		if (this.popoverKind === "geometry" && slim) this.closePopover();
 		this.selectBtn.toggleClass("is-active", selecting);
 		// [Stage H] Select on is obvious: solid accent button + accent ring around the bar; the label says how out.
 		this.el.toggleClass("is-selecting", selecting);
@@ -279,9 +290,10 @@ export class InkToolbar {
 		this.eyeBtn.toggleClass("is-active", !s.inkVisible);
 		// A tool popover belongs to the active tool.
 		const k = this.popoverKind;
-		if (k && k !== "more" && k !== "select" && k !== "snap" && (slim || k !== s.tool)) {
+		if (k && k !== "more" && k !== "select" && k !== "snap" && k !== "geometry" && (slim || k !== s.tool)) {
 			this.closePopover();
 		}
+		this.geometryBtn.toggleClass("is-active", s.setSquare || s.compass || (s.tool === "pen" && s.penShape !== "freehand"));
 		for (const [tool, b] of this.toolBtns) {
 			b.toggleClass("is-active", tool === s.tool);
 			b.toggleClass("is-open", tool === this.popoverKind);
@@ -674,6 +686,7 @@ export class InkToolbar {
 		this.renderPopover(el, kind);
 		this.placePopoverEl(el);
 		anchor.addClass("is-open");
+		if (kind === "geometry") anchor.setAttribute("aria-expanded", "true");
 		this.el.ownerDocument.addEventListener("pointerdown", this.onOutside, true);
 	}
 
@@ -682,6 +695,7 @@ export class InkToolbar {
 		if (!k) return null;
 		if (k === "select") return this.selectBtn; // [Stage F]
 		if (k === "snap") return this.grip; // [Stage M]
+		if (k === "geometry") return this.geometryBtn;
 		return k === "more" ? this.moreBtn : (this.toolBtns.get(k) ?? null);
 	}
 
@@ -706,6 +720,7 @@ export class InkToolbar {
 		if (!this.popover) return;
 		this.returnOptions();
 		this.popoverAnchor()?.removeClass("is-open");
+		if (this.popoverKind === "geometry") this.geometryBtn.setAttribute("aria-expanded", "false");
 		this.popover.remove();
 		this.popover = null;
 		this.popoverKind = null;
@@ -804,14 +819,17 @@ export class InkToolbar {
 				this.toggle(el, "Double-tap with the Pencil tip", s.doubleTapEraser, () => set({ doubleTapEraser: !s.doubleTapEraser }));
 				this.toggle(el, "Scribbling over ink", s.scribbleErase, () => set({ scribbleErase: !s.scribbleErase }));
 				break;
-			case "pen": {
-				this.title(el, "Pen");
-				this.subtitle(el, "Draw shape");
-				const shapes: [DrawShape, string][] = [["freehand", "Freehand"], ["line", "Line"], ["arrow", "Arrow"], ["rectangle", "Rectangle"], ["ellipse", "Ellipse"], ["triangle", "Triangle"]];
-				for (const row of [shapes.slice(0, 3), shapes.slice(3)]) {
-					this.segmented(el, row.map(([shape, label]) => ({ label, active: s.penShape === shape, run: () => set({ penShape: shape }) })));
+			case "geometry":
+				this.title(el, "Geometry");
+				this.subtitle(el, "Shapes");
+				for (const row of SHAPE_ROWS) {
+					this.segmented(el, row.map(([shape, label]) => ({ label, active: s.tool === "pen" && s.penShape === shape, run: () => {
+						this.closePopover();
+						set({ tool: "pen", penShape: shape });
+					} })));
 				}
-				this.toggle(el, "Set square", s.setSquare, () => set({ setSquare: !s.setSquare }));
+				this.subtitle(el, "Drawing guides");
+				this.toggle(el, "Set square", s.setSquare, () => set(s.setSquare ? { setSquare: false } : { tool: "pen", penShape: "freehand", setSquare: true, compass: false, inkVisible: true }));
 				if (s.setSquare) {
 					this.segmented(el, [
 						{ label: "−15°", active: false, run: () => set({ setSquareAngle: (s.setSquareAngle + 345) % 360 }) },
@@ -819,6 +837,13 @@ export class InkToolbar {
 						{ label: "+15°", active: false, run: () => set({ setSquareAngle: (s.setSquareAngle + 15) % 360 }) },
 					], "Rotate set square");
 				}
+				this.toggle(el, "Compass", s.compass, () => set(s.compass ? { compass: false } : { tool: "pen", penShape: "freehand", compass: true, setSquare: false, inkVisible: true }));
+				if (s.compass) {
+					this.segmented(el, [60, 100, 140].map((radius, i) => ({ label: ["Small", "Medium", "Large"][i], active: s.compassRadius === radius, run: () => set({ compassRadius: radius }) })), "Radius");
+				}
+				break;
+			case "pen":
+				this.title(el, "Pen");
 				this.segmented(
 					el,
 					[
@@ -845,7 +870,6 @@ export class InkToolbar {
 					);
 				}
 				break;
-			}
 			case "highlighter":
 				this.title(el, "Highlighter");
 				this.toggle(el, "Snap to text", s.highlighterSnapText, () => set({ highlighterSnapText: !s.highlighterSnapText }));

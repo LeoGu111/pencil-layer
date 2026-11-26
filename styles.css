@@ -55,8 +55,6 @@
 	user-select: none;
 	-webkit-user-select: none;
 	-webkit-touch-callout: none;
-	/* No native gestures on the bar (the color strip pans itself: it is its own scroll container). */
-	touch-action: none;
 }
 
 .pencil-layer-toolbar[data-orient="vertical"] {

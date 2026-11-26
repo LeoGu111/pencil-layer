@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SNAP_HOLD_MS, ShapeSpec, adjustShape, arrowBarbs, draggedShape, findCorners, recognizeShape, resample, shapeToPoints } from "../src/shapes";
-import { nearestGuideEdge, projectToEdge, setSquareEdges } from "../src/geometryGuide";
+import { compassShape, moveCompass, nearestGuideEdge, projectToEdge, setSquareEdges, startCompassDrag } from "../src/geometryGuide";
 import { XY, along, curve, cursive, handArrow, handCurve, handPolyline, handStroke, letterM, letterW, noisy, rotateAll } from "./handdrawn";
 
 const close = (a: number, b: number, tol: number) => expect(Math.abs(a - b)).toBeLessThanOrEqual(tol);
@@ -14,6 +14,7 @@ describe("geometry tools", () => {
 		expect(draggedShape("rectangle", [80, 100], [20, 40])).toEqual({ kind: "rectangle", vertices: [[80, 100], [20, 100], [20, 40], [80, 40]] });
 		expect(draggedShape("ellipse", [80, 100], [20, 60])).toEqual({ kind: "ellipse", cx: 50, cy: 80, rx: 30, ry: 20, rot: 0 });
 		expect(draggedShape("triangle", [80, 100], [20, 40])).toEqual({ kind: "triangle", vertices: [[50, 100], [20, 40], [80, 40]] });
+		expect(draggedShape("circle", [20, 60], [23, 64])).toEqual({ kind: "circle", cx: 20, cy: 60, rx: 5, ry: 5, rot: 0 });
 	});
 
 	it("snaps to one finite edge of a rotated set square", () => {
@@ -22,6 +23,20 @@ describe("geometry tools", () => {
 		expect(edge).toEqual(edges[0]);
 		closePt(projectToEdge([70, 200], edge!), [100, 150], 1e-6);
 		expect(nearestGuideEdge([170, 90], edges, 14)).toBeNull();
+	});
+
+	it.each([1, -1])("preserves compass direction across the angle seam (%s)", (direction) => {
+		const center: XY = [100, 200];
+		const at = (angle: number): XY => [100 + 60 * Math.cos(angle), 200 + 60 * Math.sin(angle)];
+		expect(startCompassDrag(center, center, 60, 14)).toBeNull();
+		const drag = startCompassDrag(at(0), center, 60, 14)!;
+		expect(compassShape(drag, 3)).toBeNull();
+		for (let step = 1; step <= 6; step++) moveCompass(drag, at(direction * step * Math.PI / 4));
+		const arc = compassShape(drag, 3);
+		expect(arc).toMatchObject({ kind: "arc", cx: 100, cy: 200, r: 60 });
+		expect(arc?.kind === "arc" && arc.sweep).toBeCloseTo(direction * 1.5 * Math.PI);
+		for (let step = 7; step <= 8; step++) moveCompass(drag, at(direction * step * Math.PI / 4));
+		expect(compassShape(drag, 3)).toEqual({ kind: "circle", cx: 100, cy: 200, rx: 60, ry: 60, rot: 0 });
 	});
 });
 

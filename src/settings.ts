@@ -110,6 +110,8 @@ export interface LocalSettings {
 	penShape: DrawShape;
 	setSquare: boolean;
 	setSquareAngle: number;
+	compass: boolean;
+	compassRadius: number;
 	/**
 	 * Per-device settings schema version. 2 (Stage F): the desktop toolbar (now the slim Select
 	 * variant) is shown by default — see `sanitizeLocal`.
@@ -129,6 +131,8 @@ export const LOCAL_KEYS: readonly (keyof LocalSettings)[] = [
 	"penShape",
 	"setSquare",
 	"setSquareAngle",
+	"compass",
+	"compassRadius",
 	"eraserMode",
 	"eraserSize",
 	"eraseHighlighterOnly",
@@ -247,6 +251,8 @@ export function defaultLocal(_isMobile: boolean): LocalSettings {
 		penShape: "freehand",
 		setSquare: false,
 		setSquareAngle: 0,
+		compass: false,
+		compassRadius: 100,
 		eraserMode: "stroke",
 		eraserSize: "m",
 		eraseHighlighterOnly: false,
@@ -385,9 +391,12 @@ export function sanitizeLocal(raw: unknown, isMobile: boolean): LocalSettings {
 		toolbarCollapsed: bool(r.toolbarCollapsed, d.toolbarCollapsed),
 		toolbarEdge: oneOf(EDGES, r.toolbarEdge, d.toolbarEdge),
 		penShape: oneOf(DRAW_SHAPES, r.penShape, d.penShape),
-		setSquare: bool(r.setSquare, d.setSquare),
+		setSquare: r.compass !== true && bool(r.setSquare, d.setSquare),
 		setSquareAngle: typeof r.setSquareAngle === "number" && Number.isFinite(r.setSquareAngle)
 			? ((Math.round(r.setSquareAngle) % 360) + 360) % 360 : d.setSquareAngle,
+		compass: bool(r.compass, d.compass),
+		compassRadius: typeof r.compassRadius === "number" && Number.isFinite(r.compassRadius)
+			? Math.max(40, Math.min(160, Math.round(r.compassRadius))) : d.compassRadius,
 		eraserMode: oneOf(ERASER_MODES, r.eraserMode, d.eraserMode),
 		eraserSize: oneOf(ERASER_SIZES, r.eraserSize, d.eraserSize),
 		eraseHighlighterOnly: bool(r.eraseHighlighterOnly, d.eraseHighlighterOnly),

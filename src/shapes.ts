@@ -74,7 +74,7 @@ export type ShapeSpec =
 	/** Smooth curve as one cubic Bézier: start `a`, controls `c1`, `c2`, end `b`. */
 	| { kind: "curve"; a: XY; c1: XY; c2: XY; b: XY };
 
-export const DRAW_SHAPES = ["freehand", "line", "arrow", "rectangle", "ellipse", "triangle"] as const;
+export const DRAW_SHAPES = ["freehand", "line", "arrow", "rectangle", "ellipse", "triangle", "circle"] as const;
 export type DrawShape = (typeof DRAW_SHAPES)[number];
 
 /** Explicit shapes are sized by dragging from one corner to another. */
@@ -89,6 +89,10 @@ export function draggedShape(kind: Exclude<DrawShape, "freehand">, a: XY, b: XY)
 		case "rectangle": return { kind, vertices: [a, [x1, y0], b, [x0, y1]] };
 		case "ellipse": return { kind, cx, cy, rx: Math.abs(x1 - x0) / 2, ry: Math.abs(y1 - y0) / 2, rot: 0 };
 		case "triangle": return { kind, vertices: [[cx, y0], [x1, y1], [x0, y1]] };
+		case "circle": {
+			const radius = Math.hypot(x1 - x0, y1 - y0);
+			return { kind, cx: x0, cy: y0, rx: radius, ry: radius, rot: 0 };
+		}
 	}
 }
 

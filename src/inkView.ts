@@ -50,7 +50,7 @@ import { straightLine } from "./highlight";
 import { isPenEraser, toolForPress } from "./penInput";
 import { blockStylusTouch, onTap } from "./tap";
 import { DrawShape, ShapeSpec, XY, adjustShape, draggedShape, recognizeShape, shapeToPoints } from "./shapes";
-import { GuideEdge, nearestGuideEdge, projectToEdge, setSquareEdges } from "./geometryGuide";
+import { CompassDrag, GuideEdge, compassShape, moveCompass, nearestGuideEdge, projectToEdge, setSquareEdges, startCompassDrag } from "./geometryGuide";
 import {
 	RecentInk,
 	ScribbleTarget,
@@ -258,6 +258,10 @@ interface TapTrack {
 	pairWith: PendingTap | null;
 }
 
+type DrawGeometry =
+	| { kind: "shape"; shape: Exclude<DrawShape, "freehand">; start: XY; edge: GuideEdge | null; end: XY | null }
+	| { kind: "compass"; drag: CompassDrag };
+
 interface DrawInput extends TapTrack {
 	kind: "draw";
 	tool: Tool;
@@ -288,7 +292,7 @@ interface DrawInput extends TapTrack {
 	holdTried: boolean;
 	/** Snapped shape being adjusted while the pen stays down. */
 	snap: { spec0: ShapeSpec; spec: ShapeSpec; p0: XY; pen: XY | null } | null;
-	geometry: { shape: Exclude<DrawShape, "freehand">; start: XY; edge: GuideEdge | null; end: XY | null } | null;
+	geometry: DrawGeometry | null;
 	/** Straight-line highlighter: the start point (points = start → pen). */
 	straight: XY | null;
 	lastScribbleCheck: number;
@@ -1429,7 +1433,8 @@ export class InkView implements PluginValue {
 				this.textHl.measure(ink?.strokes);
 				this.charA.measure(ink?.strokes); // [Stage H] characters of char-anchored ink (stale ones only)
 				const geo = this.readGeometry(view);
-				if (!this.host.getSettings().setSquare) this.guideOrigin = null;
+				const { setSquare, compass } = this.host.getSettings();
+				if (!setSquare && !compass) this.guideOrigin = null;
 				else if (!this.guideOrigin) {
 					const scroller = view.scrollDOM;
 					this.guideOrigin = [geo.width / 2, Math.max(0, scroller.scrollTop - geo.top) + Math.min(140, scroller.clientHeight / 3)];
@@ -1603,11 +1608,21 @@ export class InkView implements PluginValue {
 	}
 
 	private renderGuide(): void {
+		const origin = this.guideOrigin;
+		const settings = this.host.getSettings();
 		const edges = this.guideEdges();
-		const shown = !!this.path && edges.length > 0;
+		const shown = !!this.path && !!origin && (settings.compass || edges.length > 0);
 		this.guideOutline.classList.toggle("pl-hidden", !shown);
 		this.guideGrip.classList.toggle("pl-hidden", !shown);
-		if (!shown) return;
+		if (!shown || !origin) return;
+		if (settings.compass) {
+			const [x, y] = origin;
+			const r = settings.compassRadius;
+			this.guideOutline.setAttribute("d", `M ${x - r} ${y} a ${r} ${r} 0 0 1 ${2 * r} 0 a ${r} ${r} 0 0 1 ${-2 * r} 0 Z M ${x} ${y} h ${r}`);
+			this.guideGrip.setAttribute("cx", String(x));
+			this.guideGrip.setAttribute("cy", String(y));
+			return;
+		}
 		const [a, b, c] = edges.map(([from]) => from);
 		const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
 		const dx = (b[0] - a[0]) / length;
@@ -1822,7 +1837,12 @@ export class InkView implements PluginValue {
 		smoother.push(x, startY, p, eventTime(e));
 		const edge = tool === "pen" && (settings.penShape === "freehand" || settings.penShape === "line")
 			? nearestGuideEdge([x, y], this.guideEdges(), 14) : null;
+		const compass = tool === "pen" && settings.penShape === "freehand" && settings.compass && this.guideOrigin
+			? startCompassDrag([x, startY], this.guideOrigin, settings.compassRadius, 14) : null;
 		const shape = edge ? "line" : tool === "pen" ? settings.penShape : "freehand";
+		const geometry: DrawGeometry | null = compass ? { kind: "compass", drag: compass } : shape === "freehand" ? null : {
+			kind: "shape", shape, start: edge ? projectToEdge([x, startY], edge) : [x, startY], edge, end: null,
+		};
 		const straight: XY | null = tool === "highlighter" && settings.highlighterStraight ? [x, startY] : null;
 		const draw: DrawInput = {
 			kind: "draw",
@@ -1841,7 +1861,7 @@ export class InkView implements PluginValue {
 			holdTimer: null,
 			holdTried: false,
 			snap: null,
-			geometry: shape === "freehand" ? null : { shape, start: edge ? projectToEdge([x, startY], edge) : [x, startY], edge, end: null },
+			geometry,
 			straight,
 			lastScribbleCheck: now,
 			scribble: new ScribbleTracker(),
@@ -1926,7 +1946,7 @@ export class InkView implements PluginValue {
 			a.maxMove = Math.max(a.maxMove, Math.hypot(x - a.downX, rawY - a.downY));
 			if (a.kind === "draw") {
 				if (a.geometry) {
-					a.geometry.end = [x, y];
+					this.moveGeometry(a.geometry, [x, y]);
 					continue;
 				}
 				if (a.snap) {
@@ -2026,7 +2046,7 @@ export class InkView implements PluginValue {
 				const [x, y] = this.toOverlay(e, this.svg.getBoundingClientRect());
 				const boundedY = this.boundDrawY(a, y);
 				a.maxMove = Math.max(a.maxMove, Math.hypot(x - a.downX, y - a.downY));
-				a.geometry.end = [x, boundedY];
+				this.moveGeometry(a.geometry, [x, boundedY]);
 				this.updateDrawGeometry(a);
 			}
 		}
@@ -2536,16 +2556,26 @@ export class InkView implements PluginValue {
 		return space?.fixedHeight ? space.top + boundSpaceY(y - space.top, space.fixedHeight, a.size / 2) : y;
 	}
 
+	private moveGeometry(geometry: DrawGeometry, point: XY): void {
+		if (geometry.kind === "compass") moveCompass(geometry.drag, point);
+		else geometry.end = point;
+	}
+
 	private updateDrawGeometry(a: DrawInput): void {
 		const geometry = a.geometry;
-		if (!geometry?.end || a.maxMove < TAP.maxMove) return;
-		const end = geometry.edge ? projectToEdge(geometry.end, geometry.edge) : geometry.end;
-		if (Math.hypot(end[0] - geometry.start[0], end[1] - geometry.start[1]) < TAP.maxMove) {
+		if (!geometry || a.maxMove < TAP.maxMove) return;
+		let spec: ShapeSpec | null = null;
+		if (geometry.kind === "compass") {
+			spec = compassShape(geometry.drag, TAP.maxMove);
+		} else if (geometry.end) {
+			const end = geometry.edge ? projectToEdge(geometry.end, geometry.edge) : geometry.end;
+			if (Math.hypot(end[0] - geometry.start[0], end[1] - geometry.start[1]) >= TAP.maxMove) spec = draggedShape(geometry.shape, geometry.start, end);
+		}
+		if (!spec) {
 			a.snap = null;
 			return;
 		}
-		const spec = draggedShape(geometry.shape, geometry.start, end);
-		a.snap = { spec0: spec, spec, p0: geometry.start, pen: null };
+		a.snap = { spec0: spec, spec, p0: [a.downX, a.downY], pen: null };
 		a.points = shapeToPoints(spec).map(([px, py]): Point => [px, py, 0.5]);
 	}
 
