@@ -41,9 +41,13 @@ export interface PageGuideLayout {
 	metrics: PageGuideMetrics;
 	/** Total number of sheets currently spanned (>= 1). */
 	pageCount: number;
-	/** Total height covered by the full sheet stack (`pageCount * metrics.height`). */
+	/** Starting Y coordinate of Page 1 in overlay space (`<= 0`; negative when `.inline-title` sits above `docTop`). */
+	startY: number;
+	/** Bottom Y coordinate of the full sheet stack in overlay space. */
+	endY: number;
+	/** Total height covered by the full sheet stack (`endY - startY`). */
 	totalHeight: number;
-	/** Vertical page break Y coordinates (`pageH`, `2 * pageH`, ...). */
+	/** Vertical page break Y coordinates (`startY + pageH`, `startY + 2 * pageH`, ...). */
 	horizontalBreaks: number[];
 	/** Printable sheet width (`metrics.width`). */
 	sheetWidth: number;
@@ -126,23 +130,28 @@ export function buildPageGuideLayout(
 	overlayWidth: number,
 	overlayHeight: number,
 	visibleWidth?: number,
+	startY = 0,
 ): PageGuideLayout | null {
 	const metrics = pageGuideMetrics(format);
 	if (!metrics) return null;
 	const h = metrics.height;
+	const originY = Number.isFinite(startY) ? Math.min(0, startY) : 0;
 	const maxBreaks = 60;
 	const horizontalBreaks: number[] = [];
-	for (let y = h; y <= Math.max(overlayHeight + 40, h) && horizontalBreaks.length < maxBreaks; y += h) {
+	for (let y = originY + h; y <= Math.max(overlayHeight + 40, originY + h) && horizontalBreaks.length < maxBreaks; y += h) {
 		horizontalBreaks.push(y);
 	}
 	const pageCount = Math.max(1, horizontalBreaks.length);
-	const totalHeight = Math.max(overlayHeight, horizontalBreaks[horizontalBreaks.length - 1] ?? h);
+	const endY = Math.max(overlayHeight, horizontalBreaks[horizontalBreaks.length - 1] ?? originY + h);
+	const totalHeight = endY - originY;
 	const overflow = overlayWidth > metrics.width + 2;
 	const effectiveVisible = visibleWidth && visibleWidth > 40 ? visibleWidth : overlayWidth;
 	const labelRightX = Math.max(110, Math.min(metrics.width, effectiveVisible) - 8);
 	return {
 		metrics,
 		pageCount,
+		startY: originY,
+		endY,
 		totalHeight,
 		horizontalBreaks,
 		sheetWidth: metrics.width,

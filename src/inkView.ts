@@ -251,6 +251,31 @@ interface Geometry {
 	width: number;
 	/** Height from documentTop to the bottom of `.cm-content`. */
 	height: number;
+	/** Overlay Y where Page 1 begins (negative when `.inline-title` is visible above `docTop`, else 0). */
+	guideStartY: number;
+	/** Unzoomed CSS px of scrollable space above `guideStartY` (determines whether top label sits above the border). */
+	guideRoomAbove: number;
+}
+
+const GUIDE_TOP_LABEL_CLEARANCE = 16;
+
+function findInlineTitle(sizerEl: HTMLElement | null): Element | null {
+	const children = sizerEl?.children;
+	if (!children) return null;
+	for (let i = 0; i < children.length; i++) {
+		const c = children[i];
+		if (c.classList?.contains("inline-title")) return c;
+	}
+	return null;
+}
+
+function hasVisibleInlineTitle(sizerEl: HTMLElement | null, docTop: number): boolean {
+	const el = findInlineTitle(sizerEl);
+	if (!el || typeof el.getBoundingClientRect !== "function") return false;
+	const cs = getComputedStyle(el);
+	if (cs.display === "none" || cs.visibility === "hidden") return false;
+	const rect = el.getBoundingClientRect();
+	return rect.height > 0 && rect.width > 0 && rect.top < docTop;
 }
 
 /** Bookkeeping shared by inputs that may turn out to be a Pencil tap. */
@@ -1025,28 +1050,45 @@ export class InkView implements PluginValue {
 		const borderT = parseFloat(cs.borderTopWidth) || 0;
 		const hasLiveHeight = (cd.offsetHeight > 0 || parseFloat(cs.height) > 0) && cRect.height > 0;
 		const docTop = hasLiveHeight || this.zoom !== 1 ? cRect.top + (borderT + padT) * sy : view.documentTop;
+		const sRect = sd.getBoundingClientRect();
+		const sdCs = getComputedStyle(sd);
+		const sdBorderT = parseFloat(sdCs.borderTopWidth) || 0;
+		const sdScaleX = sd.offsetWidth > 0 && sRect.width > 0 ? sRect.width / sd.offsetWidth : 1;
+		const sdScaleY = sd.offsetHeight > 0 && sRect.height > 0 ? sRect.height / sd.offsetHeight : 1;
+		const scrollOriginTop = sRect.top + sdBorderT * sdScaleY - (sd.scrollTop || 0) * sdScaleY;
 		if (this.sizerEl && this.svg.parentElement === this.sizerEl) {
 			const hRect = this.sizerEl.getBoundingClientRect();
 			const hCs = getComputedStyle(this.sizerEl);
 			const hBorderL = parseFloat(hCs.borderLeftWidth) || 0;
 			const hBorderT = parseFloat(hCs.borderTopWidth) || 0;
+			const hPadT = parseFloat(hCs.paddingTop) || 0;
+			const top = (docTop - hRect.top) / sy - hBorderT;
+			const guideStartY = hasVisibleInlineTitle(this.sizerEl, docTop) ? Math.min(0, -top + hPadT) : 0;
+			const page1ScreenTop = docTop + guideStartY * sy;
+			const guideRoomAbove = Number.isFinite(page1ScreenTop - scrollOriginTop)
+				? Math.max(0, (page1ScreenTop - scrollOriginTop) / sy)
+				: 0;
 			return {
 				left: (cRect.left - hRect.left) / sx - hBorderL + padL,
-				top: (docTop - hRect.top) / sy - hBorderT,
+				top,
 				width: Math.max(0, cd.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0)),
 				height: Math.max(0, (cRect.bottom - docTop) / sy),
+				guideStartY,
+				guideRoomAbove,
 			};
 		}
-		const sRect = sd.getBoundingClientRect();
-		const sdScaleX = sd.offsetWidth > 0 && sRect.width > 0 ? sRect.width / sd.offsetWidth : 1;
-		const sdScaleY = sd.offsetHeight > 0 && sRect.height > 0 ? sRect.height / sd.offsetHeight : 1;
 		const baseLeft = sRect.left - sd.scrollLeft * sdScaleX;
 		const baseTop = sRect.top - sd.scrollTop * sdScaleY;
+		const guideRoomAbove = Number.isFinite(docTop - scrollOriginTop)
+			? Math.max(0, (docTop - scrollOriginTop) / sdScaleY)
+			: 0;
 		return {
 			left: (cRect.left - baseLeft) / sdScaleX + padL * (sx / sdScaleX),
 			top: (docTop - baseTop) / sdScaleY,
 			width: Math.max(0, cd.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0)),
 			height: Math.max(0, (cRect.bottom - docTop) / sy),
+			guideStartY: 0,
+			guideRoomAbove,
 		};
 	}
 
@@ -1396,12 +1438,16 @@ export class InkView implements PluginValue {
 		const sd = this.view.scrollDOM;
 		const visW = Math.round(sd.clientWidth || geo.width);
 		const leftMargin = Math.max(0, Math.round(geo.left));
-		const key = `${fmt}:${Math.round(geo.width)}x${Math.round(geo.height)}:${visW}:${leftMargin}`;
+		const startKey = Math.round(geo.guideStartY);
+		const labelAbove = geo.guideRoomAbove >= GUIDE_TOP_LABEL_CLEARANCE;
+		const key = `${fmt}:${Math.round(geo.width)}x${Math.round(geo.height)}:${visW}:${leftMargin}:${startKey}:${labelAbove ? 1 : 0}`;
 		if (key === this.pageGuideKey) return;
 		this.pageGuideKey = key;
 		this.gGuides.replaceChildren();
-		const layout = buildPageGuideLayout(fmt, geo.width, geo.height, Math.max(200, visW - leftMargin));
+		const layout = buildPageGuideLayout(fmt, geo.width, geo.height, Math.max(200, visW - leftMargin), geo.guideStartY);
 		if (!layout) return;
+		const startY = layout.startY;
+		const endY = layout.endY;
 		const totalH = layout.totalHeight;
 		const sheetW = layout.sheetWidth;
 		const paperLeft = layout.paperLeftX;
@@ -1412,7 +1458,7 @@ export class InkView implements PluginValue {
 		if (leftOuterW > 4) {
 			const leftShade = svgEl("rect", "pl-guide-overflow");
 			leftShade.setAttribute("x", String(-leftMargin));
-			leftShade.setAttribute("y", "0");
+			leftShade.setAttribute("y", String(startY));
 			leftShade.setAttribute("width", String(leftOuterW));
 			leftShade.setAttribute("height", String(totalH));
 			this.gGuides.appendChild(leftShade);
@@ -1421,7 +1467,7 @@ export class InkView implements PluginValue {
 		if (rightShadeW > 2) {
 			const shade = svgEl("rect", "pl-guide-overflow");
 			shade.setAttribute("x", String(paperRight));
-			shade.setAttribute("y", "0");
+			shade.setAttribute("y", String(startY));
 			shade.setAttribute("width", String(rightShadeW));
 			shade.setAttribute("height", String(totalH));
 			this.gGuides.appendChild(shade);
@@ -1437,19 +1483,26 @@ export class InkView implements PluginValue {
 			this.gGuides.appendChild(l);
 		};
 		// Outer paper borders (exact DIN A4 = 21 cm, A3 = 29.7 cm, etc.)
-		addLine("pl-guide-line pl-guide-paper", paperLeft, 0, paperLeft, totalH);
-		addLine("pl-guide-line pl-guide-paper", paperRight, 0, paperRight, totalH);
-		addLine("pl-guide-line pl-guide-paper", paperLeft, 0, paperRight, 0);
+		addLine("pl-guide-line pl-guide-paper", paperLeft, startY, paperLeft, endY);
+		addLine("pl-guide-line pl-guide-paper", paperRight, startY, paperRight, endY);
+		addLine("pl-guide-line pl-guide-paper", paperLeft, startY, paperRight, startY);
 		// Subtle inner print margin lines (Druckrand: 1 cm inside left & right edges)
-		addLine("pl-guide-line pl-guide-print-margin", 0, 0, 0, totalH);
-		addLine("pl-guide-line pl-guide-print-margin", sheetW, 0, sheetW, totalH);
+		addLine("pl-guide-line pl-guide-print-margin", 0, startY, 0, endY);
+		addLine("pl-guide-line pl-guide-print-margin", sheetW, startY, sheetW, endY);
 
-		// Page 1 header badge showing true paper width + print margin.
+		// Page 1 header badge showing true paper width + print margin, placed above the top border
+		// when `.cm-scroller` has clearance so it never overlaps `.inline-title` or the first line.
 		const paperWCm = Math.round((layout.paperWidth / PX_PER_CM) * 10) / 10;
 		const marginCm = Math.round((layout.marginPx / PX_PER_CM) * 10) / 10;
 		const topLabel = svgEl("text", "pl-guide-label");
-		topLabel.setAttribute("x", "8");
-		topLabel.setAttribute("y", "14");
+		if (labelAbove) {
+			topLabel.setAttribute("x", "8");
+			topLabel.setAttribute("y", String(startY - 6));
+		} else {
+			topLabel.setAttribute("x", String(layout.labelRightX));
+			topLabel.setAttribute("y", String(startY + 14));
+			topLabel.setAttribute("text-anchor", "end");
+		}
 		topLabel.textContent = `${layout.metrics.label} (${paperWCm} cm · Druckrand ${marginCm} cm) · Seite 1`;
 		this.gGuides.appendChild(topLabel);
 
@@ -1458,7 +1511,7 @@ export class InkView implements PluginValue {
 
 			const label = svgEl("text", "pl-guide-label");
 			label.setAttribute("x", String(layout.labelRightX));
-			label.setAttribute("y", String(Math.max(14, y - 6)));
+			label.setAttribute("y", String(Math.max(startY + 14, y - 6)));
 			label.setAttribute("text-anchor", "end");
 			label.textContent = `${layout.metrics.label} · Ende Seite ${idx + 1}`;
 			this.gGuides.appendChild(label);
