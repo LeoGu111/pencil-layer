@@ -12,9 +12,9 @@
  *   inside it), so switching tools never resizes or moves the bar.
  * - Grip (Stage M, `grip.ts`): tap = collapse / expand (no separate button any more), drag = move,
  *   long-press (touch/pen, 500 ms) or right-click = snap-position menu (`floating.ts SNAP_PRESETS`).
- * - Collapsed (A3, Stage M): grip + undo/redo + tools — no presets/colors/⋯. Tapping the active
+ * - Collapsed (A3, Stage M): grip + undo/redo + tools + ⋯ — no presets/colors. Tapping the active
  *   tool opens its popover, which then also hosts the bar's options area (presets/widths + colors),
- *   so nothing is lost by collapsing.
+ *   so nothing is lost by collapsing, and ⋯ keeps view actions (Zoom, Page guides, PDF export) reachable.
  * - Tool popovers (Stage E): the first tap on a tool selects it; a tap on the active tool opens its
  *   settings popover (eraser, pen, highlighter, lasso). Popovers open toward the side of the leaf
  *   with more room (`popoverSide`) and are clamped inside it.
@@ -22,8 +22,9 @@
  *   cancelled and stopped (grip + document capture) so Obsidian mobile's swipe gestures (sidebars,
  *   pull-down) never see them. Elsewhere gestures are untouched.
  * - Pencil (A3): buttons activate on pen pointerup (`tap.ts`) — the Pencil gets no reliable `click`.
- * - Slim desktop variant (Stage F): on desktop with "Mouse draws" off the bar shows only
- *   Undo, Redo, Select, Show/Hide ink and ⋯ (`is-slim`: the drawing tools and options are hidden).
+ * - Slim desktop variant (Stage F): on desktop with "Mouse draws" off the bar shows
+ *   Undo, Redo, Draw with mouse, AI, Select, Show/Hide ink and ⋯ (`is-slim`: the full drawing
+ *   tools and options are hidden). Clicking Draw with mouse enables mouse drawing in one click;
  *   Select is a session toggle: first tap turns it on, a tap on the active Select opens its popover
  *   (rectangle / freeform, filter, "Done"). Same fixed size, drag, orientation and collapse.
  * - Visibility is per device (plugin settings); hidden in Reading view (CSS).
@@ -166,9 +167,11 @@ export class InkToolbar {
 	private readonly aiBtn: HTMLElement;
 	/** Stage M: the separator after the options area (where `optionsEl` returns from a popover). */
 	private readonly optionsEndSep: HTMLElement;
-	/** [Stage F] slim desktop variant: Select tool and Show/Hide ink buttons. */
+	/** [Stage F] slim desktop variant: Draw with mouse, Select tool, Show/Hide ink, and desktop Mouse draws toggle. */
+	private readonly mouseDrawBtn: HTMLElement;
 	private readonly selectBtn: HTMLElement;
 	private readonly eyeBtn: HTMLElement;
+	private readonly mouseBtn: HTMLElement;
 	private shownEye: boolean | null = null;
 	private readonly optionsEl: HTMLElement;
 	private optionsKind: OptionsKind | null = null;
@@ -232,6 +235,12 @@ export class InkToolbar {
 		this.barEl.createDiv({ cls: "pl-sep" });
 
 		const tools = this.barEl.createDiv({ cls: "pl-group pl-tools" });
+		this.mouseDrawBtn = this.button(tools, "pen-line", "Draw with mouse (show pen & drawing tools)", () => {
+			this.closePopover();
+			this.host.updateSettings({ mouseDraws: true, tool: "pen" });
+		});
+		this.mouseDrawBtn.addClasses(["pl-tool", "pl-slim-only"]);
+		this.mouseDrawBtn.dataset.tool = "mouse-draw";
 		for (const t of ["pen", "eraser", "highlighter", "lasso"] as const) this.toolButton(tools, t);
 		this.rulerBtn = this.button(tools, "ruler", "Lineal / Geodreieck / Zirkel (erneut tippen für Optionen)", () => {
 			const s = this.host.getSettings();
@@ -279,14 +288,19 @@ export class InkToolbar {
 		this.barEl.createDiv({ cls: "pl-sep pl-exp pl-full-only" });
 		this.optionsEl = this.barEl.createDiv({ cls: "pl-options pl-exp pl-full-only" });
 
-		// Hidden when collapsed: the end group then holds only expanded-only buttons.
-		this.optionsEndSep = this.barEl.createDiv({ cls: "pl-sep pl-exp" });
-		const end = this.barEl.createDiv({ cls: "pl-group pl-exp" });
+		// End group: ⋯ stays visible when collapsed; slim-only Hide ink and full-only Mouse draws collapse into ⋯.
+		this.optionsEndSep = this.barEl.createDiv({ cls: "pl-sep" });
+		const end = this.barEl.createDiv({ cls: "pl-group" });
 		// [Stage F] Show/Hide ink directly on the slim bar.
 		this.eyeBtn = this.button(end, "eye", "Hide ink", () => this.host.updateSettings({ inkVisible: !this.host.getSettings().inkVisible }));
 		this.eyeBtn.addClasses(["pl-exp", "pl-slim-only"]);
+		// Desktop full bar: one-click toggle to switch Mouse draws on/off (back to text cursor).
+		this.mouseBtn = this.button(end, "mouse-pointer-2", "Mouse draws", () => {
+			this.closePopover();
+			this.host.updateSettings({ mouseDraws: !this.host.getSettings().mouseDraws });
+		});
+		this.mouseBtn.addClasses(["pl-exp", "pl-full-only"]);
 		this.moreBtn = this.button(end, "more-horizontal", "More", () => this.togglePopover("more", this.moreBtn));
-		this.moreBtn.addClass("pl-exp");
 		for (const b of this.toolBtns.values()) b.addClass("pl-full-only");
 
 		if (typeof ResizeObserver !== "undefined") {
@@ -302,12 +316,21 @@ export class InkToolbar {
 		this.el.toggleClass("is-hidden", !s.toolbarVisible);
 		if (!s.toolbarVisible) this.closePopover();
 		this.el.toggleClass("is-collapsed", s.toolbarCollapsed);
-		if (s.toolbarCollapsed && this.popoverKind === "more") this.closePopover();
 		this.grip.setAttribute("aria-expanded", String(!s.toolbarCollapsed));
-		// [Stage F] slim desktop variant (Mouse draws off): Undo, Redo, Select, Show/Hide ink, ⋯.
+		// [Stage F] slim desktop variant (Mouse draws off): Undo, Redo, Draw with mouse, AI, Select, Show/Hide ink, ⋯.
 		const slim = this.host.isSlim();
 		const selecting = this.host.isDeskSelecting();
 		this.el.toggleClass("is-slim", slim);
+		this.mouseDrawBtn.toggleClass("is-hidden", !this.host.showMouseToggle);
+		this.mouseBtn.toggleClass("is-hidden", !this.host.showMouseToggle);
+		this.mouseBtn.toggleClass("is-active", s.mouseDraws);
+		const mouseLabel = s.mouseDraws
+			? "Mouse draws: on (click to return to text cursor)"
+			: "Mouse draws: off (click to draw with mouse)";
+		if (this.mouseBtn.getAttribute("aria-label") !== mouseLabel) {
+			this.mouseBtn.setAttribute("aria-label", mouseLabel);
+			setTooltip(this.mouseBtn, mouseLabel, { placement: "top" });
+		}
 		if (this.popoverKind === "select" && !selecting) this.closePopover();
 		if (this.popoverKind === "geometry" && slim) this.closePopover();
 		if (this.popoverKind === "ruler" && slim) this.closePopover();
@@ -831,6 +854,9 @@ export class InkToolbar {
 				this.menuItem(el, s.inkVisible ? "eye-off" : "eye", s.inkVisible ? "Hide ink" : "Show ink", false, () =>
 					set({ inkVisible: !s.inkVisible }),
 				);
+				if (this.host.showMouseToggle) {
+					this.menuItem(el, "mouse-pointer-2", "Mouse draws", s.mouseDraws, () => set({ mouseDraws: !s.mouseDraws }));
+				}
 				// [Stage D]
 				this.menuItem(el, "file-down", "Include ink in PDF export", s.includeInkInPdf, () => set({ includeInkInPdf: !s.includeInkInPdf }));
 				// [Stage H] one-shot exports: the toggle above stays the default for Obsidian's own export.
@@ -842,9 +868,6 @@ export class InkToolbar {
 					this.menuItem(el, other === "document" ? "file-type" : "palette", styleExportLabel(other), false, () =>
 						this.host.exportPdf(this.view, { style: other }),
 					);
-				}
-				if (this.host.showMouseToggle) {
-					this.menuItem(el, "mouse-pointer-2", "Mouse draws", s.mouseDraws, () => set({ mouseDraws: !s.mouseDraws }));
 				}
 				if (s.toolbarPos || s.toolbarEdge !== "bottom") {
 					this.menuItem(el, "move-down", "Move toolbar to bottom center", false, () =>

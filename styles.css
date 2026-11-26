@@ -220,7 +220,7 @@
 	padding: var(--pl-pad) var(--pl-pad) calc(var(--pl-pad) + 2px) var(--pl-pad);
 }
 
-/* Collapsed (Stage M: tap the grip): grip, undo/redo and tools only. */
+/* Collapsed (Stage M: tap the grip): grip, undo/redo, tools and ⋯ (options strip hidden). */
 .ink-pages-toolbar.is-collapsed .pl-exp {
 	display: none;
 }
@@ -1020,7 +1020,7 @@
 
 /* ---------- Stage F: ink selection on the Mac (slim toolbar + Select tool) ---------- */
 
-/* Slim desktop toolbar (Mouse draws off): Undo, Redo, Select, Show/Hide ink, ⋯. */
+/* Slim desktop toolbar (Mouse draws off): Undo, Redo, Draw with mouse, AI, Select, Show/Hide ink, ⋯. */
 .ink-pages-toolbar:not(.is-slim) .pl-slim-only,
 .ink-pages-toolbar.is-slim .pl-full-only {
 	display: none;

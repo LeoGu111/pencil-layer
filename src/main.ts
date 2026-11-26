@@ -365,7 +365,7 @@ export default class InkPagesPlugin extends Plugin implements InkHost, ToolbarHo
 
 	/**
 	 * Desktop with "Mouse draws" off and no pen seen on this device: the slim toolbar (Undo, Redo,
-	 * Select, Show/Hide ink, ⋯). With a pen (Surface Pen, Wacom, …) the full drawing toolbar shows.
+	 * Draw with mouse, AI, Select, Show/Hide ink, ⋯). With a pen (Surface Pen, Wacom, …) the full drawing toolbar shows.
 	 */
 	isSlim(): boolean {
 		return !Platform.isMobile && !this.settings.mouseDraws && !this.settings.penDevice;
@@ -771,7 +771,7 @@ class PencilSettingTab extends PluginSettingTab {
 		const s = this.plugin.getSettings();
 		new Setting(containerEl)
 			.setName("Show ink toolbar on this device")
-			.setDesc("Floating toolbar over the note (drag it by its grip, tap the grip to collapse or expand, hold or right-click it to snap to a preset position). Stored per device (default: shown). On desktop without \"Mouse draws\" it is the slim toolbar: Undo, Redo, Select, Show/Hide ink.")
+			.setDesc("Floating toolbar over the note (drag it by its grip, tap the grip to collapse or expand, hold or right-click it to snap to a preset position). Stored per device (default: shown). On desktop without \"Mouse draws\" it is the slim toolbar: Undo, Redo, Draw with mouse, Select, Show/Hide ink, More.")
 			.addToggle((t) => t.setValue(s.toolbarVisible).onChange((v) => this.plugin.updateSettings({ toolbarVisible: v })));
 		new Setting(containerEl)
 			.setName("Show ink")
