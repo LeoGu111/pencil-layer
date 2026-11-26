@@ -53,8 +53,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          [ -f RELEASE_NOTES.md ] || echo "See the README." > RELEASE_NOTES.md
+          if [[ "$tag" == *-* ]]; then
+            release_args=(--prerelease --notes-from-tag)
+          else
+            [ -f RELEASE_NOTES.md ] || echo "See the README." > RELEASE_NOTES.md
+            release_args=(--notes-file RELEASE_NOTES.md)
+          fi
           gh release create "$tag" \
             --title="$tag" \
-            --notes-file RELEASE_NOTES.md \
+            --verify-tag "${release_args[@]}" \
             main.js manifest.json styles.css
