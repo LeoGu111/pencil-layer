@@ -2,7 +2,7 @@
  * Page boundary guide specs (A4, A3, Letter — portrait & landscape) matching Obsidian's PDF export
  * dimensions (`readingMap.ts` `printAreaWidth` / `printAreaHeight`), pure and tested.
  */
-import { PRINT_PAGE_CLEARANCE, printAreaHeight, printAreaWidth } from "./readingMap";
+import { PRINT_PAGE_CLEARANCE, pageSpec, printAreaHeight, printAreaWidth } from "./readingMap";
 
 export type PageGuideFormat = "off" | "A4" | "A4-landscape" | "A3" | "A3-landscape" | "Letter";
 
@@ -29,6 +29,10 @@ export interface PageGuideMetrics {
 	label: string;
 	/** Printable width in editor/PDF CSS px (matching Obsidian's default 1 cm print margin). */
 	width: number;
+	/** Full physical paper width in CSS px (e.g. 794 px = 21.0 cm for A4). */
+	paperWidth: number;
+	/** Left/right print margin in CSS px (e.g. 38 px = 1.0 cm). */
+	marginPx: number;
 	/** Printable height of one sheet in editor/PDF CSS px. */
 	height: number;
 }
@@ -41,8 +45,16 @@ export interface PageGuideLayout {
 	totalHeight: number;
 	/** Vertical page break Y coordinates (`pageH`, `2 * pageH`, ...). */
 	horizontalBreaks: number[];
-	/** Sheet width (`metrics.width`). */
+	/** Printable sheet width (`metrics.width`). */
 	sheetWidth: number;
+	/** Full physical paper width (`metrics.paperWidth`). */
+	paperWidth: number;
+	/** Left/right print margin in CSS px (`metrics.marginPx`). */
+	marginPx: number;
+	/** Outer paper left edge in overlay space (`-metrics.marginPx`). */
+	paperLeftX: number;
+	/** Outer paper right edge in overlay space (`metrics.width + metrics.marginPx`). */
+	paperRightX: number;
 	/** Width covered by horizontal rules (clamped to `metrics.width` when wider, else `overlayWidth`). */
 	guideWidth: number;
 	/** Visible X position for page labels (always visible even when sheet exceeds viewport). */
@@ -64,10 +76,13 @@ export function pageGuideMetrics(format: PageGuideFormat): PageGuideMetrics | nu
 	if (format === "off") return null;
 	const cfg = GUIDE_CFG[format];
 	if (!cfg) return null;
+	const spec = pageSpec(cfg);
 	return {
 		format,
 		label: cfg.label,
 		width: Math.round(printAreaWidth(cfg)),
+		paperWidth: Math.round(spec.width),
+		marginPx: Math.round(spec.margin),
 		height: Math.floor(printAreaHeight(cfg) - PRINT_PAGE_CLEARANCE),
 	};
 }
@@ -131,6 +146,10 @@ export function buildPageGuideLayout(
 		totalHeight,
 		horizontalBreaks,
 		sheetWidth: metrics.width,
+		paperWidth: metrics.paperWidth,
+		marginPx: metrics.marginPx,
+		paperLeftX: -metrics.marginPx,
+		paperRightX: metrics.width + metrics.marginPx,
 		guideWidth: overflow ? metrics.width : overlayWidth,
 		labelRightX,
 		overflowX: overflow ? metrics.width : null,

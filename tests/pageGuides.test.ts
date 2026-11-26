@@ -8,19 +8,25 @@ describe("pageGuides", () => {
 		const a4Land = pageGuideMetrics("A4-landscape")!;
 		expect(a4.width).toBeGreaterThan(680);
 		expect(a4.width).toBeLessThan(760);
+		expect(a4.paperWidth).toBe(794);
+		expect(a4.marginPx).toBe(38);
 		expect(a4.height).toBeGreaterThan(1000);
 		expect(a4.height).toBeLessThan(1100);
 		expect(a3.width).toBeGreaterThan(a4.width * 1.35);
+		expect(a3.paperWidth).toBeGreaterThan(1100);
 		expect(a3.height).toBeGreaterThan(a4.height * 1.35);
 		expect(a4Land.width).toBeGreaterThan(a4Land.height);
 		expect(pageGuideMetrics("off")).toBeNull();
 	});
 
-	it("builds horizontal page breaks and overflow bounds when the editor is wider than the sheet", () => {
+	it("builds horizontal page breaks, full paper frame, and inner print margin bounds", () => {
 		const layout = buildPageGuideLayout("A4", 900, 2200)!;
 		expect(layout.horizontalBreaks.length).toBeGreaterThanOrEqual(2);
 		expect(layout.horizontalBreaks[0]).toBe(layout.metrics.height);
 		expect(layout.horizontalBreaks[1]).toBe(layout.metrics.height * 2);
+		expect(layout.paperLeftX).toBe(-layout.marginPx);
+		expect(layout.paperRightX).toBe(layout.sheetWidth + layout.marginPx);
+		expect(layout.paperRightX - layout.paperLeftX).toBe(layout.metrics.width + layout.marginPx * 2);
 		expect(layout.overflowX).toBe(layout.metrics.width);
 		expect(layout.overflowWidth).toBe(900 - layout.metrics.width);
 		expect(layout.guideWidth).toBe(layout.metrics.width);

@@ -471,6 +471,7 @@ export class InkView implements PluginValue {
 	/** Page pinch-to-zoom state (`1` = 100%). */
 	private zoom = 1;
 	private sizerEl: HTMLElement | null = null;
+	private zoomBaseSizerWidth: number | null = null;
 	private zoomSpacer: HTMLElement | null = null;
 	private zoomBadge: HTMLElement | null = null;
 	private pinch: { activation: PinchActivation; startZoom: number; prevMid: { x: number; y: number }; lastZoom: number } | null = null;
@@ -618,8 +619,9 @@ export class InkView implements PluginValue {
 			this.onDocChanged(u, this.path);
 		}
 		// [Stage H] characters may have moved (re-wrap, edits; Live Preview reveals markup on the
-		// cursor's line): re-measure character-anchored ink. A pure scroll doesn't move text.
-		if (u.docChanged || u.geometryChanged || u.heightChanged || u.selectionSet) this.charA.invalidate();
+		// cursor's line): re-measure character-anchored ink. A pure scroll or CSS pinch-zoom doesn't move text.
+		const zoomedLayoutOnly = this.zoom !== 1 && !u.docChanged && !u.selectionSet;
+		if (!zoomedLayoutOnly && (u.docChanged || u.geometryChanged || u.heightChanged || u.selectionSet)) this.charA.invalidate();
 		if (u.docChanged || u.geometryChanged || u.viewportChanged || u.heightChanged) this.scheduleRender();
 		else if (u.selectionSet && this.hasCharInk()) this.scheduleRender();
 	}
@@ -1154,6 +1156,7 @@ export class InkView implements PluginValue {
 			return pointerType !== "pen";
 		}
 		if (typeof Node !== "undefined" && target instanceof Node) {
+			if (this.guideResetBtn.contains?.(target) || this.guideCloseBtn.contains?.(target)) return true;
 			if (this.gGuideUi.contains?.(target)) return pointerType !== "pen";
 			if (this.menuEl && this.menuEl.contains(target)) return true;
 			if (this.mathBarEl && this.mathBarEl.contains(target)) return true;
@@ -1196,6 +1199,12 @@ export class InkView implements PluginValue {
 		const sRect = sd.getBoundingClientRect();
 		const oldScrollLeft = sd.scrollLeft;
 		const oldScrollTop = sd.scrollTop;
+		const sizer = this.sizerEl ?? this.zoomTargetEl();
+		if (prev === 1 && target !== 1 && sizer && sizer.offsetWidth > 0) {
+			this.zoomBaseSizerWidth = sizer.offsetWidth;
+		} else if (target === 1) {
+			this.zoomBaseSizerWidth = null;
+		}
 		this.zoom = target;
 		this.applyZoomDom();
 		if (focalClient && prev > 0) {
@@ -1207,10 +1216,15 @@ export class InkView implements PluginValue {
 			sd.scrollLeft = scrollForZoomAnchor(oldScrollLeft, fx0, ratio, fx1);
 			sd.scrollTop = scrollForZoomAnchor(oldScrollTop, fy0, ratio, fy1);
 		}
-		this.applyGeometry(this.readGeometry(this.view));
+		// When the SVG lives inside `.cm-sizer`, text and ink scale rigidly under one CSS transform —
+		// skip re-measuring CM6 geometry / character anchors mid-pinch so letters can never drift.
+		const unified = !!(this.sizerEl && this.svg.parentElement === this.sizerEl);
+		if (!unified || (target === 1 && prev !== 1)) {
+			this.applyGeometry(this.readGeometry(this.view));
+		}
 		this.renderSelection();
 		this.updateZoomBadge();
-		if (Math.abs(target - prev) > 1e-4) this.scheduleRender();
+		if ((!unified || (target === 1 && prev !== 1)) && Math.abs(target - prev) > 1e-4) this.scheduleRender();
 	}
 
 	private zoomTargetEl(): HTMLElement | null {
@@ -1232,7 +1246,10 @@ export class InkView implements PluginValue {
 				sizer.appendChild(this.svg);
 			}
 			sizer.classList.toggle("pl-zoom-target", z !== 1);
-			sizer.setCssProps({ transform: z === 1 ? "" : `scale(${z})` });
+			sizer.setCssProps({
+				transform: z === 1 ? "" : `scale(${z})`,
+				width: z === 1 || !this.zoomBaseSizerWidth ? "" : `${this.zoomBaseSizerWidth}px`,
+			});
 			this.svg.setCssProps({ transform: "" });
 		} else {
 			this.svg.setCssProps({ transform: z === 1 ? "" : `scale(${z})` });
@@ -1242,10 +1259,11 @@ export class InkView implements PluginValue {
 
 	private resetZoomDom(): void {
 		this.zoom = 1;
+		this.zoomBaseSizerWidth = null;
 		const sizer = this.sizerEl ?? this.zoomTargetEl();
 		if (sizer) {
 			sizer.classList.remove("pl-zoom-target");
-			sizer.setCssProps({ transform: "" });
+			sizer.setCssProps({ transform: "", width: "" });
 		}
 		this.svg.setCssProps({ transform: "" });
 	}
@@ -1326,27 +1344,30 @@ export class InkView implements PluginValue {
 		if (!layout) return;
 		const totalH = layout.totalHeight;
 		const sheetW = layout.sheetWidth;
+		const paperLeft = layout.paperLeftX;
+		const paperRight = layout.paperRightX;
 
-		// Subtle outer margin shading on the left & right of the printable sheet so the A4/A3 sheet stands out clearly.
-		if (leftMargin > 4) {
+		// Subtle shading OUTSIDE the physical paper (beyond the 1 cm print margins).
+		const leftOuterW = leftMargin + paperLeft;
+		if (leftOuterW > 4) {
 			const leftShade = svgEl("rect", "pl-guide-overflow");
 			leftShade.setAttribute("x", String(-leftMargin));
 			leftShade.setAttribute("y", "0");
-			leftShade.setAttribute("width", String(leftMargin));
+			leftShade.setAttribute("width", String(leftOuterW));
 			leftShade.setAttribute("height", String(totalH));
 			this.gGuides.appendChild(leftShade);
 		}
-		const rightShadeW = Math.max(layout.overflowWidth, visW - leftMargin - sheetW);
+		const rightShadeW = Math.max(geo.width - paperRight, visW - leftMargin - paperRight);
 		if (rightShadeW > 2) {
 			const shade = svgEl("rect", "pl-guide-overflow");
-			shade.setAttribute("x", String(sheetW));
+			shade.setAttribute("x", String(paperRight));
 			shade.setAttribute("y", "0");
 			shade.setAttribute("width", String(rightShadeW));
 			shade.setAttribute("height", String(totalH));
 			this.gGuides.appendChild(shade);
 		}
 
-		// Complete sheet side borders (LEFT + RIGHT + TOP) so boundaries are always visible on every note & format.
+		// Full physical paper frame (e.g. 21.0 cm wide for A4) + subtle inner 1 cm print margin ("Druckrand").
 		const addLine = (cls: string, x1: number, y1: number, x2: number, y2: number) => {
 			const l = svgEl("line", cls);
 			l.setAttribute("x1", String(x1));
@@ -1355,21 +1376,25 @@ export class InkView implements PluginValue {
 			l.setAttribute("y2", String(y2));
 			this.gGuides.appendChild(l);
 		};
-		addLine("pl-guide-line pl-guide-margin", 0, 0, 0, totalH);
-		addLine("pl-guide-line pl-guide-margin", sheetW, 0, sheetW, totalH);
-		addLine("pl-guide-line pl-guide-break", 0, 0, sheetW, 0);
+		// Outer paper borders (exact DIN A4 = 21 cm, A3 = 29.7 cm, etc.)
+		addLine("pl-guide-line pl-guide-paper", paperLeft, 0, paperLeft, totalH);
+		addLine("pl-guide-line pl-guide-paper", paperRight, 0, paperRight, totalH);
+		addLine("pl-guide-line pl-guide-paper", paperLeft, 0, paperRight, 0);
+		// Subtle inner print margin lines (Druckrand: 1 cm inside left & right edges)
+		addLine("pl-guide-line pl-guide-print-margin", 0, 0, 0, totalH);
+		addLine("pl-guide-line pl-guide-print-margin", sheetW, 0, sheetW, totalH);
 
-		// Page 1 header badge (clearly states printable area inside A4/A3 so cm ruler matches expectations).
-		const wCm = Math.round((sheetW / PX_PER_CM) * 10) / 10;
-		const hCm = Math.round((layout.metrics.height / PX_PER_CM) * 10) / 10;
+		// Page 1 header badge showing true paper width + print margin.
+		const paperWCm = Math.round((layout.paperWidth / PX_PER_CM) * 10) / 10;
+		const marginCm = Math.round((layout.marginPx / PX_PER_CM) * 10) / 10;
 		const topLabel = svgEl("text", "pl-guide-label");
 		topLabel.setAttribute("x", "8");
 		topLabel.setAttribute("y", "14");
-		topLabel.textContent = `${layout.metrics.label} (${wCm} × ${hCm} cm Druckbereich) · Seite 1`;
+		topLabel.textContent = `${layout.metrics.label} (${paperWCm} cm · Druckrand ${marginCm} cm) · Seite 1`;
 		this.gGuides.appendChild(topLabel);
 
 		layout.horizontalBreaks.forEach((y, idx) => {
-			addLine("pl-guide-line pl-guide-break", 0, y, sheetW, y);
+			addLine("pl-guide-line pl-guide-break", paperLeft, y, paperRight, y);
 
 			const label = svgEl("text", "pl-guide-label");
 			label.setAttribute("x", String(layout.labelRightX));
@@ -1683,7 +1708,6 @@ export class InkView implements PluginValue {
 	}
 
 	private readonly onTouch = (e: TouchEvent): void => {
-		if (this.isUiTarget(e.target)) return;
 		let stylus = false;
 		const direct: { x: number; y: number }[] = [];
 		for (let i = 0; i < e.changedTouches.length; i++) {
@@ -1694,6 +1718,7 @@ export class InkView implements PluginValue {
 			if (t.touchType === "stylus") stylus = true;
 			else if (typeof t.clientX === "number" && typeof t.clientY === "number") direct.push({ x: t.clientX, y: t.clientY });
 		}
+		if (this.isUiTarget(e.target, stylus ? "pen" : "touch")) return;
 		if (stylus) {
 			this.pinch = null;
 			// Blocks scrolling, selection/caret moves, compat mouse events and iPadOS Scribble.
@@ -1867,13 +1892,6 @@ export class InkView implements PluginValue {
 			return;
 		}
 		const params = strokeParams(settings, tool);
-		const el = svgEl("path");
-		const tilt = settings.tiltShading ? pointerTilt(e) : 0;
-		const hasTilt = tiltWidthMultiplier(tilt, params.style, params.tool) > 1.01;
-		paint(el, hasTilt ? { ...params, tilts: [tilt] } : params);
-		(tool === "highlighter" ? this.gHlLive : this.gPenLive).appendChild(el);
-		const smoother = new StrokeSmoother(SMOOTHING_PARAMS[settings.smoothing]);
-		smoother.push(x, y, p, eventTime(e));
 		const edge = tool === "pen" && (settings.penShape === "freehand" || settings.penShape === "line")
 			? nearestGuideEdge([x, y], this.guideEdges(), 24) : null;
 		const compass = tool === "pen" && settings.penShape === "freehand" && settings.compass && this.guideOrigin
@@ -1882,6 +1900,14 @@ export class InkView implements PluginValue {
 		const geometry: DrawGeometry | null = compass ? { kind: "compass", drag: compass } : shape === "freehand" ? null : {
 			kind: "shape", shape, start: edge ? projectToInfiniteEdge([x, y], edge) : [x, y], edge, end: null,
 		};
+		const el = svgEl("path");
+		const tilt = settings.tiltShading ? pointerTilt(e) : 0;
+		// Geometry/ruler strokes render snapped shapes without tilt outlines; never strip their live stroke!
+		const hasTilt = !geometry && tiltWidthMultiplier(tilt, params.style, params.tool) > 1.01;
+		paint(el, hasTilt ? { ...params, tilts: [tilt] } : params);
+		(tool === "highlighter" ? this.gHlLive : this.gPenLive).appendChild(el);
+		const smoother = new StrokeSmoother(SMOOTHING_PARAMS[settings.smoothing]);
+		smoother.push(x, y, p, eventTime(e));
 		const straight: XY | null = tool === "highlighter" && settings.highlighterStraight ? [x, y] : null;
 		const draw: DrawInput = {
 			kind: "draw",
@@ -2007,7 +2033,7 @@ export class InkView implements PluginValue {
 				if (ev.pointerType !== "pen" || ev.pressure > 0) a.lastPressure = p;
 				const tilt = settings.tiltShading ? pointerTilt(ev) : 0;
 				a.lastTilt = tilt;
-				if (!a.hasTilt && tiltWidthMultiplier(tilt, a.style, a.tool) > 1.01) {
+				if (!a.geometry && !a.snap && !a.hasTilt && tiltWidthMultiplier(tilt, a.style, a.tool) > 1.01) {
 					a.hasTilt = true;
 					a.curve = null;
 					paint(a.el, { ...a, tilts: [tilt] });
@@ -2591,13 +2617,14 @@ export class InkView implements PluginValue {
 
 	private updateDrawGeometry(a: DrawInput): void {
 		const geometry = a.geometry;
-		if (!geometry || a.maxMove < TAP.maxMove) return;
+		const minDrag = 2;
+		if (!geometry || a.maxMove < minDrag) return;
 		let spec: ShapeSpec | null = null;
 		if (geometry.kind === "compass") {
-			spec = compassShape(geometry.drag, TAP.maxMove);
+			spec = compassShape(geometry.drag, minDrag);
 		} else if (geometry.end) {
 			const end = geometry.edge ? projectToInfiniteEdge(geometry.end, geometry.edge) : geometry.end;
-			if (Math.hypot(end[0] - geometry.start[0], end[1] - geometry.start[1]) >= TAP.maxMove) spec = draggedShape(geometry.shape, geometry.start, end);
+			if (Math.hypot(end[0] - geometry.start[0], end[1] - geometry.start[1]) >= minDrag) spec = draggedShape(geometry.shape, geometry.start, end);
 		}
 		if (!spec) {
 			a.snap = null;
@@ -2627,6 +2654,10 @@ export class InkView implements PluginValue {
 		this.clearFade();
 		a.snap = { spec0: spec, spec, p0: [a.holdX, a.holdY], pen: null };
 		a.points = shapeToPoints(spec).map((p): Point => [p[0], p[1], 0.5]);
+		if (a.hasTilt) {
+			a.hasTilt = false;
+			paint(a.el, { ...this.drawShape(a), color: a.color });
+		}
 		this.scheduleLive();
 	}
 
@@ -3138,7 +3169,7 @@ export class InkView implements PluginValue {
 		this.closeMenu();
 		this.host.exitDeskSelect();
 		const r = this.svg.getBoundingClientRect();
-		const pos = this.view.posAtCoords({ x: r.left + x * (this.view.scaleX || 1), y: r.top + y * (this.view.scaleY || 1) }, false);
+		const pos = this.view.posAtCoords({ x: r.left + x * this.effectiveScaleX(), y: r.top + y * this.effectiveScaleY() }, false);
 		this.host.deskSelectionMade(this); // makes this leaf the active one
 		this.view.dispatch({ selection: { anchor: pos }, userEvent: "select.pointer" });
 		this.view.focus();
@@ -3446,7 +3477,7 @@ export class InkView implements PluginValue {
 		const geo = this.geo;
 		if (!geo) return;
 		const rect = this.svg.getBoundingClientRect();
-		const sx = this.view.scaleX || 1;
+		const sx = this.effectiveScaleX();
 		const [tapX, tapY] = this.clientToOverlay(clientX, clientY, rect);
 		const lineH = this.view.defaultLineHeight || 24;
 		const charW = this.view.defaultCharacterWidth || 8.5;
@@ -3729,6 +3760,7 @@ export class InkView implements PluginValue {
 			provider: settings.mathProvider,
 			apiKey: settings.mathApiKey,
 			geminiApiKey: settings.geminiApiKey,
+			geminiModel: settings.geminiModel,
 		});
 		if (this.destroyed || this.path !== path || !this.store.isLoaded(path)) return false;
 		if (!rawTex.trim()) {

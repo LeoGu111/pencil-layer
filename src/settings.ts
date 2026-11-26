@@ -305,7 +305,7 @@ export function defaultLocal(_isMobile: boolean): LocalSettings {
 		mathProvider: "offline",
 		mathApiKey: "",
 		geminiApiKey: "",
-		geminiModel: "gemini-2.5-flash",
+		geminiModel: "gemini-4-hydrogen",
 		pageGuide: "A4",
 		eraserMode: "stroke",
 		eraserSize: "m",
@@ -328,7 +328,19 @@ const ERASER_MODES: readonly EraserMode[] = ["stroke", "precise"];
 const ERASER_SIZES: readonly EraserSize[] = ["s", "m", "l"];
 const MATH_DELIMITERS: readonly MathDelimiters[] = ["auto", "inline", "block"];
 const MATH_PROVIDERS: readonly MathVisionProvider[] = ["offline", "gemini", "openai"];
-const GEMINI_MODEL_VALUES: readonly GeminiModel[] = ["gemini-2.5-flash", "gemini-2.5-pro"];
+const GEMINI_MODEL_VALUES: readonly GeminiModel[] = [
+	"gemini-4-hydrogen",
+	"gemini-4-neon",
+	"gemini-4-argon",
+	"gemini-4-carbon",
+	"gemini-3.8-flash",
+];
+
+function sanitizeGeminiModel(v: unknown, fallback: GeminiModel): GeminiModel {
+	if (v === "gemini-2.5-flash") return "gemini-4-hydrogen";
+	if (v === "gemini-2.5-pro") return "gemini-4-argon";
+	return oneOf(GEMINI_MODEL_VALUES, v, fallback);
+}
 const LASSO_FILTERS: readonly LassoFilter[] = ["both", "pen", "highlighter"];
 const SELECT_MODES: readonly SelectMode[] = ["rect", "lasso"];
 
@@ -466,7 +478,7 @@ export function sanitizeLocal(raw: unknown, isMobile: boolean): LocalSettings {
 		mathProvider: oneOf(MATH_PROVIDERS, r.mathProvider, d.mathProvider),
 		mathApiKey: typeof r.mathApiKey === "string" ? r.mathApiKey : d.mathApiKey,
 		geminiApiKey: typeof r.geminiApiKey === "string" ? r.geminiApiKey : d.geminiApiKey,
-		geminiModel: oneOf(GEMINI_MODEL_VALUES, r.geminiModel, d.geminiModel),
+		geminiModel: sanitizeGeminiModel(r.geminiModel, d.geminiModel),
 		pageGuide: oneOf(PAGE_GUIDE_FORMATS, r.pageGuide, d.pageGuide),
 		eraserMode: oneOf(ERASER_MODES, r.eraserMode, d.eraserMode),
 		eraserSize: oneOf(ERASER_SIZES, r.eraserSize, d.eraserSize),

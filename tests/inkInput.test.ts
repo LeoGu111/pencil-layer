@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { InkView, type InkHost } from "../src/inkView";
 import { emptyInk, type Stroke } from "../src/model";
 import { DEFAULT_SYNCED, defaultLocal, type PencilSettings } from "../src/settings";
+import { overlayOrigin } from "../src/textHighlightView";
 
 class TestElement extends EventTarget {
 	readonly classList = { add: vi.fn(), remove: vi.fn(), toggle: vi.fn() };
@@ -181,5 +182,56 @@ describe("free drawing without Ink spaces", () => {
 		pointer("pointerup");
 		expect(runPencilGestureAction).toHaveBeenCalledWith("palette");
 		expect(toggleEraser).not.toHaveBeenCalled();
+	});
+
+	it("keeps ruler/shape live stroke visibly stroked even when Apple Pencil is tilted", () => {
+		let rafCb: FrameRequestCallback | null = null;
+		const { pointer, elements, addStroke } = makeEditor({ tool: "pen", penShape: "line", doubleTapEraser: false, tiltShading: true });
+		vi.stubGlobal("window", {
+			setTimeout,
+			clearTimeout,
+			requestAnimationFrame: vi.fn((cb: FrameRequestCallback) => {
+				rafCb = cb;
+				return 1;
+			}),
+			cancelAnimationFrame: vi.fn(),
+		});
+		// Tilted Apple Pencil (~60°): geometry line must stay a stroked centerline live, not fill-only.
+		pointer("pointerdown", 1, 20, 40, { tiltX: 60, tiltY: 0, pressure: 0.7 });
+		const liveEl = elements[elements.length - 1];
+		pointer("pointermove", 1, 80, 40, { tiltX: 62, tiltY: 0, pressure: 0.7 });
+		expect(rafCb).not.toBeNull();
+		rafCb!(16);
+		// Must have a non-empty SVG path AND visible stroke styling BEFORE pointerup.
+		const dCalls = liveEl.setAttribute.mock.calls.filter(([k]) => k === "d");
+		expect(dCalls.length).toBeGreaterThan(0);
+		expect(dCalls[dCalls.length - 1][1]).toMatch(/^M20 40 .*L80 40$/);
+		const cssCalls = liveEl.setCssProps.mock.calls;
+		const lastCss = cssCalls[cssCalls.length - 1][0] as Record<string, string>;
+		expect(lastCss.stroke).not.toBe("");
+		expect(liveEl.setAttribute).toHaveBeenCalledWith("stroke-width", expect.any(String));
+
+		pointer("pointerup", 1, 100, 40, { tiltX: 62, tiltY: 0, pressure: 0 });
+		expect(addStroke).toHaveBeenCalledOnce();
+		expect(addStroke.mock.calls[0][1].shape).toBe("line");
+	});
+
+	it("computes live zoomed scale in overlayOrigin when CSS zoom differs from cached CM6 scale", () => {
+		vi.stubGlobal("getComputedStyle", () => ({ paddingLeft: "10", paddingTop: "20" }));
+		const fakeView = {
+			scaleX: 1,
+			scaleY: 1,
+			documentTop: 20,
+			contentDOM: {
+				offsetWidth: 500,
+				offsetHeight: 1000,
+				getBoundingClientRect: () => ({ left: 40, top: 10, width: 1000, height: 2000 }),
+			},
+		};
+		const o = overlayOrigin(fakeView as unknown as EditorView);
+		expect(o.sx).toBeCloseTo(2, 5);
+		expect(o.sy).toBeCloseTo(2, 5);
+		expect(o.x).toBeCloseTo(60, 5);
+		expect(o.y).toBeCloseTo(50, 5);
 	});
 });

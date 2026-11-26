@@ -405,4 +405,14 @@ describe("Apple Pencil feel, tilt & gestures settings", () => {
 		expect(sanitizeLocal({ pageGuide: "A5" }, true).pageGuide).toBe("A4");
 		expect(Object.keys(splitPatch({ mathApiKey: "k", mathMode: true, pageGuide: "A3" }).synced)).toEqual([]);
 	});
+
+	it("uses current Gemini 4 models by default and migrates legacy Gemini 2.5 selections", () => {
+		expect(defaultLocal(true).geminiModel).toBe("gemini-4-hydrogen");
+		expect(sanitizeLocal({ geminiModel: "gemini-2.5-flash" }, true).geminiModel).toBe("gemini-4-hydrogen");
+		expect(sanitizeLocal({ geminiModel: "gemini-2.5-pro" }, true).geminiModel).toBe("gemini-4-argon");
+		expect(sanitizeLocal({ geminiModel: "gemini-4-neon" }, true).geminiModel).toBe("gemini-4-neon");
+		expect(sanitizeLocal({ geminiModel: "gemini-4-carbon" }, true).geminiModel).toBe("gemini-4-carbon");
+		expect(sanitizeLocal({ geminiModel: "gemini-3.8-flash" }, true).geminiModel).toBe("gemini-3.8-flash");
+		expect(sanitizeLocal({ geminiModel: "unknown-old-model" }, true).geminiModel).toBe("gemini-4-hydrogen");
+	});
 });

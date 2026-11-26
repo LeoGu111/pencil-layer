@@ -8,12 +8,13 @@ import type { BBox } from "./geometry";
 import type { Stroke } from "./model";
 import { freeCanvas, renderInkCanvas } from "./screenshot";
 import { cleanVisionLatexResponse, recognizeMathFromStrokes } from "./mathLatex";
-import type { MathVisionProvider } from "./settings";
+import type { GeminiModel, MathVisionProvider } from "./settings";
 
 export interface VisionMathOptions {
 	provider: MathVisionProvider;
 	apiKey: string;
 	geminiApiKey?: string;
+	geminiModel?: GeminiModel;
 }
 
 export function strokesToPngBase64(strokes: readonly Stroke[], box: BBox): string {
@@ -44,9 +45,9 @@ export function strokesToPngBase64(strokes: readonly Stroke[], box: BBox): strin
 const PROMPT =
 	"Transcribe this handwritten mathematical formula into clean LaTeX. Output ONLY the raw LaTeX expression without surrounding $ or $$ delimiters and without markdown code fences.";
 
-async function callGemini(base64Png: string, apiKey: string): Promise<string> {
+async function callGemini(base64Png: string, apiKey: string, model: GeminiModel): Promise<string> {
 	const res = await requestUrl({
-		url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+		url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		throw: false,
@@ -124,7 +125,8 @@ export async function recognizeMathStrokes(
 	if (effectiveProvider !== "offline" && key) {
 		try {
 			const png = strokesToPngBase64(overlayStrokes, box);
-			const out = effectiveProvider === "gemini" ? await callGemini(png, key) : await callOpenAI(png, key);
+			const model: GeminiModel = opts.geminiModel ?? "gemini-4-hydrogen";
+			const out = effectiveProvider === "gemini" ? await callGemini(png, key, model) : await callOpenAI(png, key);
 			if (out) return { tex: out, usedVision: true };
 		} catch (err) {
 			console.warn("[pencil-layer] Vision LaTeX request failed, falling back to offline recognizer", err);

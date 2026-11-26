@@ -14,11 +14,19 @@
 import { App, Modal, Notice, Platform, requestUrl } from "obsidian";
 import { copyPngToClipboard } from "./screenshot";
 
-export type GeminiModel = "gemini-2.5-flash" | "gemini-2.5-pro";
+export type GeminiModel =
+	| "gemini-4-hydrogen"
+	| "gemini-4-neon"
+	| "gemini-4-argon"
+	| "gemini-4-carbon"
+	| "gemini-3.8-flash";
 
 export const GEMINI_MODELS: readonly { value: GeminiModel; label: string }[] = [
-	{ value: "gemini-2.5-flash", label: "Gemini 2.5 Flash (schnell)" },
-	{ value: "gemini-2.5-pro", label: "Gemini 2.5 Pro (tiefes Denken)" },
+	{ value: "gemini-4-hydrogen", label: "Gemini 4 Hydrogen (Standard · schnell)" },
+	{ value: "gemini-4-neon", label: "Gemini 4 Neon (Mathe, MINT & Code)" },
+	{ value: "gemini-4-argon", label: "Gemini 4 Argon (Tiefes Denken)" },
+	{ value: "gemini-4-carbon", label: "Gemini 4 Carbon (Flaggschiff)" },
+	{ value: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Ultra-schnell)" },
 ];
 
 export const GEMINI_VIEW_TYPE = "ink-pages-gemini-view";

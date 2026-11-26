@@ -51,11 +51,14 @@ export interface Origin {
 /** Client position of the overlay origin (same as InkView.readGeometry: content left + padding, documentTop). */
 export function overlayOrigin(view: EditorView): Origin {
 	const cd = view.contentDOM;
-	const sx = view.scaleX || 1;
-	const sy = view.scaleY || 1;
+	const cs = getComputedStyle(cd);
+	const padL = parseFloat(cs.paddingLeft) || 0;
+	const padT = parseFloat(cs.paddingTop) || 0;
 	const rect = cd.getBoundingClientRect();
-	const padL = parseFloat(getComputedStyle(cd).paddingLeft) || 0;
-	return { x: rect.left + padL * sx, y: view.documentTop, sx, sy };
+	const sx = cd.offsetWidth > 0 && rect.width > 0 ? rect.width / cd.offsetWidth : (view.scaleX || 1);
+	const sy = cd.offsetHeight > 0 && rect.height > 0 ? rect.height / cd.offsetHeight : (view.scaleY || 1);
+	const y = Math.abs(sy - (view.scaleY || 1)) > 0.005 ? rect.top + padT * sy : view.documentTop;
+	return { x: rect.left + padL * sx, y, sx, sy };
 }
 
 /** Rows (overlay space) of the visible part of a range, from DOM ranges per document line. */
