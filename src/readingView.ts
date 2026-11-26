@@ -206,18 +206,28 @@ function lineHeightOf(el: HTMLElement): number {
 	return Number.isFinite(fs) && fs > 0 ? fs * 1.5 : 24;
 }
 
+function elementScale(el: HTMLElement, rect: DOMRect): [number, number] {
+	const ow = el.offsetWidth;
+	const oh = el.offsetHeight;
+	let sx = ow > 0 && rect.width > 0 ? rect.width / ow : 1;
+	let sy = oh > 0 && rect.height > 0 ? rect.height / oh : 1;
+	if (!Number.isFinite(sx) || Math.abs(sx - 1) <= 0.005) sx = 1;
+	if (!Number.isFinite(sy) || Math.abs(sy - 1) <= 0.005) sy = 1;
+	return [sx, sy];
+}
+
 /** Bottom of the section's own content (our SVG excluded), relative to `top`. */
-function contentBottom(el: HTMLElement, top: number): number {
+function contentBottom(el: HTMLElement, top: number, sy = 1): number {
 	let bottom = 0;
 	let any = false;
 	for (const c of Array.from(el.children)) {
 		if (isOurs(c)) continue;
 		const r = c.getBoundingClientRect();
 		if (r.width === 0 && r.height === 0) continue;
-		bottom = Math.max(bottom, r.bottom - top);
+		bottom = Math.max(bottom, (r.bottom - top) / sy);
 		any = true;
 	}
-	return any ? bottom : el.getBoundingClientRect().height;
+	return any ? bottom : el.getBoundingClientRect().height / sy;
 }
 
 /** Top of the first rendered content after a `<br>` (= the next source line's top). */
@@ -245,7 +255,7 @@ function topAfter(node: Node): number | null {
  * Measured tops of source lines inside a section: list items (one `<li>` per item line), table
  * rows, `<br>`-separated paragraph lines, code block content. Everything else is interpolated.
  */
-function measureMarks(el: HTMLElement, lines: readonly string[], start: number, end: number, top: number): LineMark[] {
+function measureMarks(el: HTMLElement, lines: readonly string[], start: number, end: number, top: number, sy = 1): LineMark[] {
 	if (end <= start) return [];
 	const marks: LineMark[] = [];
 	const lis = Array.from(el.querySelectorAll("li"));
@@ -258,14 +268,14 @@ function measureMarks(el: HTMLElement, lines: readonly string[], start: number, 
 				const dl = li.getAttribute("data-line");
 				if (dl !== null && /^\d+$/.test(dl)) line = start + Number(dl);
 			}
-			if (line !== undefined) marks.push({ line, y: li.getBoundingClientRect().top - top });
+			if (line !== undefined) marks.push({ line, y: (li.getBoundingClientRect().top - top) / sy });
 		});
 		return marks;
 	}
 	const trs = Array.from(el.querySelectorAll("tr"));
 	if (trs.length > 0) {
 		const rows = tableRowLines(lines, start, end);
-		if (rows.length === trs.length) trs.forEach((tr, i) => marks.push({ line: rows[i], y: tr.getBoundingClientRect().top - top }));
+		if (rows.length === trs.length) trs.forEach((tr, i) => marks.push({ line: rows[i], y: (tr.getBoundingClientRect().top - top) / sy }));
 		return marks;
 	}
 	const fence = /^\s*(```|~~~)/;
@@ -276,15 +286,15 @@ function measureMarks(el: HTMLElement, lines: readonly string[], start: number, 
 		const cs = el.ownerDocument.defaultView?.getComputedStyle(code);
 		const pt = cs ? parseFloat(cs.paddingTop) || 0 : 0;
 		const pb = cs ? parseFloat(cs.paddingBottom) || 0 : 0;
-		marks.push({ line: start + 1, y: r.top + pt - top });
-		if (fence.test(lines[end] ?? "")) marks.push({ line: end, y: r.bottom - pb - top });
+		marks.push({ line: start + 1, y: (r.top - top) / sy + pt });
+		if (fence.test(lines[end] ?? "")) marks.push({ line: end, y: (r.bottom - top) / sy - pb });
 		return marks;
 	}
 	const brs = Array.from(el.querySelectorAll("br"));
 	if (brs.length === end - start) {
 		brs.forEach((br, i) => {
 			const y = topAfter(br);
-			if (y !== null) marks.push({ line: start + i + 1, y: y - top });
+			if (y !== null) marks.push({ line: start + i + 1, y: (y - top) / sy });
 		});
 	}
 	return marks;
@@ -326,7 +336,7 @@ function sectionText(el: HTMLElement): SectionText {
  * Rows of a text highlight's pieces inside this section, found in the rendered text (see
  * readingMap.ts). Rects are relative to (left, top). Empty when the text can't be located.
  */
-function measureTextRows(el: HTMLElement, st: SectionText, lay: Layout, pieces: { line: number; from: number; to: number }[], left: number, top: number, lh: number): Row[] {
+function measureTextRows(el: HTMLElement, st: SectionText, lay: Layout, pieces: { line: number; from: number; to: number }[], left: number, top: number, lh: number, sx = 1, sy = 1): Row[] {
 	const doc = el.ownerDocument;
 	const { nodes, nodeAt, offAt, hay } = st;
 	const rects: Row[] = [];
@@ -350,7 +360,7 @@ function measureTextRows(el: HTMLElement, st: SectionText, lay: Layout, pieces: 
 			continue;
 		}
 		for (const r of Array.from(range.getClientRects())) {
-			rects.push({ left: r.left - left, top: r.top - top, right: r.right - left, bottom: r.bottom - top });
+			rects.push({ left: (r.left - left) / sx, top: (r.top - top) / sy, right: (r.right - left) / sx, bottom: (r.bottom - top) / sy });
 		}
 	}
 	return mergeRows(rects, 2.5 * lh);
@@ -360,7 +370,7 @@ function measureTextRows(el: HTMLElement, st: SectionText, lay: Layout, pieces: 
  * [Stage H] Top-left and height (relative to (left, top)) of character `ch` of source line `line` in the
  * section's rendered text (the Stage C matching, on the word around it), or null if not found.
  */
-function measureChar(el: HTMLElement, st: SectionText, lay: Layout, line: number, ch: number, left: number, top: number, lh: number): [number, number, number] | null {
+function measureChar(el: HTMLElement, st: SectionText, lay: Layout, line: number, ch: number, left: number, top: number, lh: number, sx = 1, sy = 1): [number, number, number] | null {
 	const n = charNeedle(lay.lines, lay.lineStart, line, ch);
 	if (!n) return null;
 	const at = findNth(st.hay.text, n.needle, n.k);
@@ -374,8 +384,8 @@ function measureChar(el: HTMLElement, st: SectionText, lay: Layout, line: number
 	} catch {
 		return null;
 	}
-	const r = Array.from(range.getClientRects()).find((q) => q.height > 0 && q.height <= 2.5 * lh);
-	return r ? [r.left - left, r.top - top, r.height] : null;
+	const r = Array.from(range.getClientRects()).find((q) => q.height / sy > 0 && q.height / sy <= 2.5 * lh);
+	return r ? [(r.left - left) / sx, (r.top - top) / sy, r.height / sy] : null;
 }
 
 function svgEl<K extends keyof SVGElementTagNameMap>(doc: Document, tag: K): SVGElementTagNameMap[K] {
@@ -425,7 +435,7 @@ function clearSection(el: HTMLElement): void {
  * with a large bottom padding to the next page whole, so a spacer is the only form that keeps the
  * last line where it is and lets the drawing below the end of the note flow onto further pages.
  */
-function setGap(el: HTMLElement, px: number, room = false, contentHeight?: number): void {
+function setGap(el: HTMLElement, px: number, room = false, contentHeight?: number, sy = 1): void {
 	const cur = el.getAttribute(GAP_ATTR);
 	const want = px > 0 ? `${room ? `r${Math.round(contentHeight ?? 0)}:` : "m"}${px}` : null;
 	if (cur === want) return;
@@ -441,7 +451,7 @@ function setGap(el: HTMLElement, px: number, room = false, contentHeight?: numbe
 		const sp = el.createDiv({ cls: ROOM_CLASS, attr: { "aria-hidden": "true" } });
 		// `px` is counted from the content's bottom; the spacer starts below the last child's bottom
 		// margin, so subtract what is already there (one layout read; only the last section).
-		const already = sp.getBoundingClientRect().top - el.getBoundingClientRect().top - (contentHeight ?? 0);
+		const already = (sp.getBoundingClientRect().top - el.getBoundingClientRect().top) / sy - (contentHeight ?? 0);
 		sp.style.height = `${Math.max(0, Math.ceil(px - Math.max(0, already)))}px`;
 	} else el.style.marginBottom = `${px}px`;
 }
@@ -494,11 +504,12 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 
 	// Layout reads.
 	const elRect = el.getBoundingClientRect();
+	const [sx, sy] = elementScale(el, elRect);
 	const top = elRect.top;
 	const left = elRect.left;
-	const height = contentBottom(el, top);
+	const height = contentBottom(el, top, sy);
 	const lh = lineHeightOf(el);
-	const marks = measureMarks(el, lines, lineStart, lineEnd, top);
+	const marks = measureMarks(el, lines, lineStart, lineEnd, top, sy);
 	const yOf = (line: number) => lineTop(line, marks, lineStart, lineEnd, height, lh);
 	const target: InkTarget = lay.print ? "paper" : "screen";
 
@@ -512,7 +523,7 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	st.overflow = "visible";
 	st.pointerEvents = "none";
 	st.zIndex = "5";
-	svg.setAttribute("width", String(Math.max(1, Math.round(elRect.width))));
+	svg.setAttribute("width", String(Math.max(1, Math.round(elRect.width / sx))));
 	svg.setAttribute("height", String(Math.max(1, Math.round(height))));
 	if (doc.body.classList.contains("theme-light") || lay.print) st.mixBlendMode = "multiply";
 	const gHl = svgEl(doc, "g");
@@ -540,7 +551,7 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	const textOf = () => (text ??= sectionText(el));
 	// Text highlights: exact rows from the rendered text; the owner falls back to the drawn path.
 	for (const t of texts) {
-		const rows = t.pieces.length > 0 ? measureTextRows(el, textOf(), lay, t.pieces, left, top, lh) : [];
+		const rows = t.pieces.length > 0 ? measureTextRows(el, textOf(), lay, t.pieces, left, top, lh, sx, sy) : [];
 		if (rows.length > 0) addPath(t.s, rowsPath(rows), 0);
 		else if (t.line >= range.from && t.line <= range.to && t.s.points.length > 0) addPath(t.s, pathOf(t.s), yOf(t.line));
 	}
@@ -552,7 +563,7 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 		let box = 0;
 		if (s.char && charLine !== undefined) {
 			// [Stage H] at its character's rendered rect + offset; else the section mapping.
-			const c = measureChar(el, textOf(), lay, charLine, s.char.ch, left, top, lh);
+			const c = measureChar(el, textOf(), lay, charLine, s.char.ch, left, top, lh, sx, sy);
 			if (c) {
 				[x, y] = charOrigin(c, s.char);
 				anchorTop = c[1];
@@ -579,11 +590,11 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 		const plan = planSlices(roomPx, extents, { pageHeight: lay.pageHeight, firstRoom: Math.max(96, lay.pageHeight - (height % lay.pageHeight)) });
 		if (plan.slices.length > 1) {
 			const firstSlice = plan.slices[0];
-			const w = Math.max(1, Math.round(elRect.width));
+			const w = Math.max(1, Math.round(elRect.width / sx));
 			// Clip main SVG strictly at end of slice 0 so continuation slices draw pages 2+ cleanly.
 			svg.classList.add("pl-reading-slice-svg");
 			svg.setAttribute("height", String(Math.max(1, Math.ceil(height + firstSlice.to))));
-			setGap(el, Math.ceil(firstSlice.to - firstSlice.from), true, height);
+			setGap(el, Math.ceil(firstSlice.to - firstSlice.from), true, height, sy);
 			for (let si = 1; si < plan.slices.length; si++) {
 				const slice = plan.slices[si];
 				const sliceH = Math.max(1, Math.ceil(slice.to - slice.from));
@@ -615,7 +626,7 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 			return drawn;
 		}
 	}
-	setGap(el, roomPx, atEnd, height);
+	setGap(el, roomPx, atEnd, height, sy);
 	return drawn;
 }
 
@@ -915,9 +926,10 @@ export class ReadingInk {
 		for (const leaf of this.host.app.workspace.getLeavesOfType("markdown")) {
 			const v = leaf.view;
 			if (!(v instanceof MarkdownView)) continue;
-			const cm = (v.editor as unknown as { cm?: { defaultLineHeight?: number } }).cm;
-			const lh = cm?.defaultLineHeight;
-			if (typeof lh !== "number" || !(lh > 0)) continue;
+			const cm = (v.editor as unknown as { cm?: { defaultLineHeight?: number; scaleY?: number } }).cm;
+			const rawLh = cm?.defaultLineHeight;
+			if (typeof rawLh !== "number" || !(rawLh > 0)) continue;
+			const lh = rawLh / (cm?.scaleY || 1);
 			if (v.file?.path === path) return lh;
 			any ??= lh;
 		}

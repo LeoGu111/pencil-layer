@@ -17,7 +17,7 @@ import type { Text } from "@codemirror/state";
 import type { BBox } from "./geometry";
 import type { Stroke } from "./model";
 import { CHAR_ANCHOR, XY, charAnchorAt, charOffset, charSized, nearChar, pickChar, refPoint, resolveCharPos, touches } from "./charAnchor";
-import { Origin, overlayOrigin } from "./textHighlightView";
+import { Origin, overlayOrigin, unzoomedLineTop } from "./textHighlightView";
 
 /** A character's rect in overlay space: top-left and height. */
 interface CharRect {
@@ -89,7 +89,8 @@ export class CharAnchors {
 			o ??= overlayOrigin(view);
 			const c = this.charRect(Math.min(cp, doc.length), o);
 			if (!c) continue;
-			const top = view.lineBlockAt(doc.lineAt(Math.min(Math.max(s.pos, 0), doc.length)).from).top;
+			const lineFrom = doc.lineAt(Math.min(Math.max(s.pos, 0), doc.length)).from;
+			const top = unzoomedLineTop(view, lineFrom, o);
 			this.shifts.set(s, { x: c.x + s.char.dx, y: c.y + s.char.dy - top, gen: this.gen });
 		}
 	}
@@ -112,7 +113,8 @@ export class CharAnchors {
 	 */
 	anchorUnit(strokes: readonly Stroke[], box: BBox, join = false): boolean {
 		const view = this.view;
-		const lh = view.defaultLineHeight;
+		const sy = view.scaleY || 1;
+		const lh = view.defaultLineHeight / sy;
 		if (strokes.length === 0 || strokes.some((s) => s.text || s.pos === undefined) || !charSized(box, lh)) return false;
 		const o = overlayOrigin(view);
 		const doc = view.state.doc;
@@ -148,7 +150,8 @@ export class CharAnchors {
 		}
 		if (charPos === null || rect === null) return false;
 		for (const s of strokes) {
-			const top = view.lineBlockAt(doc.lineAt(Math.min(Math.max(s.pos!, 0), doc.length)).from).top;
+			const lineFrom = doc.lineAt(Math.min(Math.max(s.pos!, 0), doc.length)).from;
+			const top = unzoomedLineTop(view, lineFrom, o);
 			s.char = charAnchorAt(doc, charPos, charOffset([0, top], [rect.x, rect.y]));
 			s.charPos = charPos;
 			this.shifts.set(s, { x: 0, y: 0, gen: this.gen });

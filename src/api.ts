@@ -113,7 +113,7 @@ export function createApi(app: App, store: () => InkStore): PencilLayerApi {
 				? (line: number): number | null => {
 						const doc = cm.state.doc;
 						if (doc.lines !== lines.length || line < 0 || line >= doc.lines) return null;
-						return cm.lineBlockAt(doc.line(line + 1).from).top;
+						return cm.lineBlockAt(doc.line(line + 1).from).top / (cm.scaleY || 1);
 					}
 				: undefined;
 			const out: InkDrawing[] = [];

@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { InkView, type InkHost } from "../src/inkView";
 import { emptyInk, type Stroke } from "../src/model";
 import { DEFAULT_SYNCED, defaultLocal, type PencilSettings } from "../src/settings";
-import { overlayOrigin } from "../src/textHighlightView";
+import { elementBoxScale, overlayOrigin, unzoomedLineTop } from "../src/textHighlightView";
+import { CharAnchors } from "../src/charAnchorView";
 
 class TestElement extends EventTarget {
 	readonly classList = { add: vi.fn(), remove: vi.fn(), toggle: vi.fn() };
@@ -233,5 +234,238 @@ describe("free drawing without Ink spaces", () => {
 		expect(o.sy).toBeCloseTo(2, 5);
 		expect(o.x).toBeCloseTo(60, 5);
 		expect(o.y).toBeCloseTo(50, 5);
+
+		// Subpixel computed CSS height avoids integer offsetHeight drift on tall documents.
+		const fakeEl = {
+			offsetWidth: 500,
+			offsetHeight: 15000, // rounded from 15000.45
+		} as unknown as HTMLElement;
+		const sub = elementBoxScale(
+			fakeEl,
+			{ width: 300, height: 15000.45 * 0.6 },
+			1,
+			1,
+			{ width: "500px", height: "15000.45px", boxSizing: "border-box" } as unknown as CSSStyleDeclaration,
+		);
+		expect(sub.sx).toBeCloseTo(0.6, 7);
+		expect(sub.sy).toBeCloseTo(0.6, 7);
+	});
+
+	it("returns unzoomed line top when CM6 scaleY is zoomed or stale", () => {
+		vi.stubGlobal("getComputedStyle", () => ({ paddingLeft: "0", paddingTop: "10" }));
+		const lineEl = {
+			classList: { contains: (c: string) => c === "cm-line" },
+			closest: function (sel: string) {
+				return sel === ".cm-line" ? this : null;
+			},
+			getBoundingClientRect: () => ({ left: 0, top: 100, width: 400, height: 48 }),
+		};
+		const fakeView = {
+			scaleX: 1,
+			scaleY: 1, // stale relative to 2x CSS zoom on contentDOM
+			documentTop: 10,
+			viewport: { from: 0, to: 100 },
+			contentDOM: {
+				offsetWidth: 500,
+				offsetHeight: 1000,
+				contains: (el: unknown) => el === lineEl,
+				getBoundingClientRect: () => ({ left: 0, top: 20, width: 1000, height: 2000 }),
+			},
+			domAtPos: () => ({ node: { nodeType: 1, closest: (s: string) => lineEl.closest(s) }, offset: 0 }),
+			lineBlockAt: () => ({ top: 480, bottom: 528 }),
+		};
+		// (100 - (20 + 10 * 2)) / 2 = 30 even though CM6 scaleY is stale and lineBlockAt is 480.
+		expect(unzoomedLineTop(fakeView as unknown as EditorView, 20)).toBeCloseTo(30, 5);
+		// Outside viewport falls back to dividing scaled heightMap by view.scaleY.
+		const scaledFallbackView = { ...fakeView, scaleY: 2, viewport: { from: 50, to: 100 } };
+		expect(unzoomedLineTop(scaledFallbackView as unknown as EditorView, 20)).toBeCloseTo(240, 5);
+	});
+
+	it("anchors and re-measures CharAnchors in unzoomed coordinates when view.scaleY is 2", () => {
+		vi.stubGlobal("getComputedStyle", () => ({ paddingLeft: "0", paddingTop: "0" }));
+		const doc = EditorState.create({ doc: "First line\nSecond line" }).doc;
+		const lineTopUnzoomed = [0, 24];
+		const lineEl = {
+			closest: () => lineEl,
+			getBoundingClientRect: () => ({ left: 0, top: 48, width: 200, height: 48 }),
+		};
+		const fakeView = {
+			state: { doc },
+			scaleX: 2,
+			scaleY: 2,
+			documentTop: 0,
+			defaultLineHeight: 48, // 2x zoomed CM6 heightOracle
+			viewport: { from: 0, to: doc.length },
+			contentDOM: {
+				offsetWidth: 400,
+				offsetHeight: 200,
+				contains: () => true,
+				getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 400 }),
+			},
+			domAtPos: (pos: number) => ({
+				node: {
+					nodeType: 3,
+					parentElement: {
+						closest: (sel: string) => (pos >= 11 && sel === ".cm-line" ? lineEl : null),
+					},
+				},
+				offset: 0,
+			}),
+			lineBlockAt: (pos: number) => {
+				const idx = doc.lineAt(pos).number - 1;
+				const t = lineTopUnzoomed[idx] * 2;
+				return { from: doc.line(idx + 1).from, top: t, bottom: t + 48 };
+			},
+			posAtCoords: () => 11,
+			coordsAtPos: () => ({ left: 20, right: 36, top: 48, bottom: 96 }), // unzoomed: x=10, y=24, h=24
+		};
+		const charA = new CharAnchors(fakeView as unknown as EditorView);
+		const stroke: Stroke = {
+			id: "s1",
+			tool: "pen",
+			color: "ink",
+			size: 2,
+			anchor: { line: 1, hash: "" },
+			points: [[12, 4, 0.5], [18, 12, 0.5]],
+			pos: 11,
+		};
+		expect(charA.anchorUnit([stroke], { minX: 12, minY: 28, maxX: 18, maxY: 36 })).toBe(true);
+		expect(stroke.char).toBeDefined();
+		expect(stroke.char!.dy).toBeCloseTo(0, 5);
+		expect(charA.shift(stroke)).toEqual([0, 0]);
+		charA.invalidate();
+		charA.measure([stroke]);
+		expect(charA.shift(stroke)).toEqual([0, 0]);
+	});
+
+	it("renders and draws strokes in unzoomed coordinates when zoomed at 2x with scaleY=2", () => {
+		const lines = Array.from({ length: 12 }, (_, i) => `Line ${i + 1} content`);
+		const state = EditorState.create({ doc: lines.join("\n") });
+		const doc = state.doc;
+		const elements: TestElement[] = [];
+		const addStroke = vi.fn<(path: string, stroke: Stroke) => void>();
+		const storedStroke: Stroke = {
+			id: "existing",
+			tool: "pen",
+			color: "ink",
+			size: 2,
+			anchor: { line: 10, hash: "" },
+			points: [[10, 5, 0.5], [30, 10, 0.5]],
+			pos: doc.line(11).from,
+		};
+		let pendingMeasure: { read: (v: EditorView) => unknown; write: (v: unknown) => void } | null = null;
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+		vi.stubGlobal("window", { setTimeout, clearTimeout, requestAnimationFrame: vi.fn(() => 1), cancelAnimationFrame: vi.fn() });
+		vi.stubGlobal("getComputedStyle", () => ({ paddingLeft: "0", paddingRight: "0", paddingTop: "0", borderLeftWidth: "0", borderTopWidth: "0", borderRightWidth: "0" }));
+		vi.stubGlobal("activeDocument", {
+			createElementNS: () => {
+				const el = new TestElement();
+				elements.push(el);
+				return el;
+			},
+			createRange: () => ({ setStart: vi.fn(), setEnd: vi.fn(), getClientRects: () => [] }),
+		});
+		const scrollDOM = Object.assign(new TestElement(), {
+			scrollLeft: 0,
+			scrollTop: 0,
+			clientWidth: 400,
+			clientHeight: 400,
+			setPointerCapture: vi.fn(),
+			hasPointerCapture: vi.fn(() => true),
+			releasePointerCapture: vi.fn(),
+			getBoundingClientRect: () => ({ left: 0, top: 0, width: 400, height: 400, bottom: 400 }),
+		});
+		const contentDOM = Object.assign(new TestElement(), {
+			clientWidth: 300,
+			offsetWidth: 300,
+			offsetHeight: 600,
+			contains: () => false,
+			getBoundingClientRect: () => ({ left: 0, top: 0, width: 600, height: 1200, bottom: 1200 }),
+		});
+		const view = {
+			scrollDOM,
+			contentDOM,
+			state: {
+				doc,
+				selection: state.selection,
+				field: (field: unknown) => (field === undefined ? { file: { extension: "md", path: "Test.md" } } : undefined),
+			},
+			scaleX: 2,
+			scaleY: 2,
+			documentTop: 0,
+			contentHeight: 1200,
+			defaultLineHeight: 48,
+			viewport: { from: doc.line(5).from, to: doc.length },
+			posAtCoords: () => doc.line(11).from,
+			coordsAtPos: () => ({ left: 20, right: 36, top: 480, bottom: 528 }),
+			domAtPos: () => ({ node: { nodeType: 3, parentElement: { closest: () => null } }, offset: 0 }),
+			lineBlockAt: (pos: number) => {
+				const idx = doc.lineAt(pos).number - 1;
+				const top = idx * 48; // 2x zoomed CM6 heightMap (unzoomed 24px/line)
+				return { from: doc.line(idx + 1).from, top, bottom: top + 48 };
+			},
+			lineBlockAtHeight: (h: number) => {
+				const idx = Math.max(0, Math.min(doc.lines - 1, Math.floor(h / 48)));
+				const line = doc.line(idx + 1);
+				return { from: line.from, top: idx * 48, bottom: (idx + 1) * 48 };
+			},
+			requestMeasure: vi.fn((spec: { read: (v: EditorView) => unknown; write: (v: unknown) => void }) => {
+				pendingMeasure = spec;
+			}),
+		};
+		const host = {
+			store: {
+				subscribe: vi.fn(),
+				load: () => new Promise(() => {}),
+				isLoaded: () => true,
+				get: () => ({ version: 2, strokes: [storedStroke] }),
+				allStrokes: () => [storedStroke],
+				setContentWidth: vi.fn(),
+				addStroke,
+			},
+			getSettings: () => ({ ...DEFAULT_SYNCED, ...defaultLocal(true), tool: "pen", doubleTapEraser: false }),
+			registerInkView: vi.fn(),
+			penSeen: vi.fn(),
+			deskSelect: () => null,
+			selectionToolActive: () => false,
+		};
+		const ink = new InkView(view as unknown as EditorView, host as unknown as InkHost);
+		ink.setZoom(2);
+		expect(pendingMeasure).not.toBeNull();
+		pendingMeasure!.write(pendingMeasure!.read(view as unknown as EditorView));
+
+		// Existing stroke on line 11 (unzoomed top = 240, scaled lineBlockAt = 480) must render at translate(0 240).
+		const pathTransforms = elements
+			.flatMap((el) => el.setAttribute.mock.calls.filter(([k]) => k === "transform").map(([, v]) => String(v)));
+		expect(pathTransforms).toContain("translate(0 240)");
+		expect(pathTransforms).not.toContain("translate(0 480)");
+
+		// Drawing while zoomed at 2x: clientY=490 maps to overlayY=245 -> anchored to line 11 (top=240), point y=5.
+		const svgEl = elements[0];
+		Object.defineProperty(svgEl, "getBoundingClientRect", {
+			value: () => ({ left: 0, top: 0, width: 600, height: 1200, bottom: 1200 }),
+		});
+		const dispatch = (type: string, clientX: number, clientY: number) =>
+			scrollDOM.dispatchEvent(
+				Object.assign(new Event(type, { cancelable: true }), {
+					pointerId: 7,
+					pointerType: "pen",
+					button: 0,
+					buttons: type === "pointerup" ? 0 : 1,
+					clientX,
+					clientY,
+					pressure: 0.5,
+					tiltX: 0,
+					tiltY: 0,
+				}),
+			);
+		dispatch("pointerdown", 60, 490);
+		dispatch("pointermove", 360, 500);
+		dispatch("pointerup", 360, 500);
+		expect(addStroke).toHaveBeenCalledOnce();
+		const created = addStroke.mock.calls[0][1];
+		expect(created.pos).toBe(doc.line(11).from);
+		expect(created.points[0][0]).toBeCloseTo(30, 5);
+		expect(created.points[0][1]).toBeCloseTo(5, 5);
 	});
 });

@@ -89,6 +89,9 @@
 
 .pl-zoom-target {
 	transform-origin: 0 0;
+	box-sizing: border-box !important;
+	flex-grow: 0 !important;
+	flex-shrink: 0 !important;
 }
 
 .pencil-layer-overlay {

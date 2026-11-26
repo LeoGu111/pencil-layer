@@ -151,8 +151,8 @@ export async function rasterizeEditorText(view: EditorView, region: Rect, scale:
 
 	// Is there typed text in the region at all? (Blank output is then an error, not "no text".)
 	const doc = view.state.doc;
-	const a = view.lineBlockAtHeight(Math.max(0, region.y));
-	const b = view.lineBlockAtHeight(Math.max(0, region.y + region.h));
+	const a = view.lineBlockAtHeight(Math.max(0, region.y) * sy);
+	const b = view.lineBlockAtHeight(Math.max(0, region.y + region.h) * sy);
 	const expectText = doc.sliceString(a.from, b.to).trim().length > 0;
 
 	const render = async (): Promise<HTMLCanvasElement> => {

@@ -114,7 +114,7 @@ import { MenuState, menuForSelection, placeMenu } from "./menu";
 import { embedInsertion, rectFromBox, stageRect } from "./crop";
 import { ScreenshotSource, copyPngToClipboard, freeCanvas, rasterizeEditorText, renderInkCanvas } from "./screenshot";
 import type { RenderStroke } from "./inkRender";
-import { TextHighlights } from "./textHighlightView"; // [Stage C]
+import { Origin, TextHighlights, elementBoxScale, overlayOrigin, unzoomedLineTop } from "./textHighlightView"; // [Stage C]
 import { inkColor } from "./inkColor"; // [Stage L]
 import { CharAnchors } from "./charAnchorView"; // [Stage H]
 import { CLICK_MOVE, CLICK_TOLERANCE, DeskTarget, InkKeyAction, deskPress, deskRegionRelease, pickTopmost, rectPolygon, strokeNear } from "./select"; // [Stage F/H]
@@ -474,6 +474,7 @@ export class InkView implements PluginValue {
 	private zoomBaseSizerWidth: number | null = null;
 	private zoomSpacer: HTMLElement | null = null;
 	private zoomBadge: HTMLElement | null = null;
+	private measuredLineTops: ReadonlyMap<number, number> | null = null;
 	private pinch: { activation: PinchActivation; startZoom: number; prevMid: { x: number; y: number }; lastZoom: number } | null = null;
 	/** Floating Formula preview/edit bar (keeps handwritten strokes safe until confirmed). */
 	private mathBarEl: HTMLElement | null = null;
@@ -619,9 +620,8 @@ export class InkView implements PluginValue {
 			this.onDocChanged(u, this.path);
 		}
 		// [Stage H] characters may have moved (re-wrap, edits; Live Preview reveals markup on the
-		// cursor's line): re-measure character-anchored ink. A pure scroll or CSS pinch-zoom doesn't move text.
-		const zoomedLayoutOnly = this.zoom !== 1 && !u.docChanged && !u.selectionSet;
-		if (!zoomedLayoutOnly && (u.docChanged || u.geometryChanged || u.heightChanged || u.selectionSet)) this.charA.invalidate();
+		// cursor's line): re-measure character-anchored ink. A pure scroll doesn't move text.
+		if (u.docChanged || u.geometryChanged || u.heightChanged || u.selectionSet) this.charA.invalidate();
 		if (u.docChanged || u.geometryChanged || u.viewportChanged || u.heightChanged) this.scheduleRender();
 		else if (u.selectionSet && this.hasCharInk()) this.scheduleRender();
 	}
@@ -878,13 +878,16 @@ export class InkView implements PluginValue {
 		if (Number.isFinite(minX)) this.charA.anchorUnit(strokes, { minX, minY, maxX, maxY });
 	}
 
-	/** Overlay-space top of a stroke's anchor line. */
+	/** Overlay-space top of a stroke's anchor line (unzoomed CSS px). */
 	private lineTop(s: Stroke): number {
 		const doc = this.view.state.doc;
 		if (s.pos === undefined) {
 			s.pos = doc.line(resolveAnchor(lineSource(doc), s.anchor) + 1).from;
 		}
-		return this.view.lineBlockAt(doc.lineAt(clampPos(doc, s.pos)).from).top;
+		const lineFrom = doc.lineAt(clampPos(doc, s.pos)).from;
+		const cached = this.measuredLineTops?.get(lineFrom);
+		if (cached !== undefined) return cached;
+		return unzoomedLineTop(this.view, lineFrom);
 	}
 
 	/**
@@ -896,13 +899,15 @@ export class InkView implements PluginValue {
 		const doc = view.state.doc;
 		let minY = Infinity;
 		for (const p of points) if (p[1] < minY) minY = p[1];
+		const sy = view.scaleY || 1;
 		const lastBlock = view.lineBlockAt(doc.length);
+		const scaledMinY = Math.max(minY, 0) * sy;
 		const line =
-			minY >= lastBlock.bottom ? doc.line(doc.lines) : doc.lineAt(view.lineBlockAtHeight(Math.max(minY, 0)).from);
+			scaledMinY >= lastBlock.bottom ? doc.line(doc.lines) : doc.lineAt(view.lineBlockAtHeight(scaledMinY).from);
 		return {
 			anchor: { line: line.number - 1, hash: hashLine(line.text) },
 			pos: line.from,
-			top: view.lineBlockAt(line.from).top,
+			top: unzoomedLineTop(view, line.from),
 		};
 	}
 
@@ -915,23 +920,45 @@ export class InkView implements PluginValue {
 				const ink = this.path && this.host.getSettings().inkVisible ? this.store.get(this.path) : undefined;
 				this.textHl.measure(ink?.strokes);
 				this.charA.measure(ink?.strokes); // [Stage H] characters of char-anchored ink (stale ones only)
+				const lineTops = new Map<number, number>();
+				if (ink && ink.strokes.length > 0) {
+					const doc = view.state.doc;
+					let src: ReturnType<typeof lineSource> | null = null;
+					let origin: Origin | null = null;
+					for (const s of ink.strokes) {
+						if (s.text) continue;
+						if (s.pos === undefined) {
+							src ??= lineSource(doc);
+							s.pos = doc.line(resolveAnchor(src, s.anchor) + 1).from;
+						}
+						const lineFrom = doc.lineAt(clampPos(doc, s.pos)).from;
+						if (lineTops.has(lineFrom)) continue;
+						origin ??= overlayOrigin(view);
+						lineTops.set(lineFrom, unzoomedLineTop(view, lineFrom, origin));
+					}
+				}
 				const geo = this.readGeometry(view);
 				const { ruler, setSquare, compass } = this.host.getSettings();
 				if (!ruler && !setSquare && !compass) this.guideOrigin = null;
 				else if (!this.guideOrigin) {
 					const scroller = view.scrollDOM;
-					const z = this.zoom || 1;
-					const visTop = Math.max(0, (scroller.scrollTop - geo.top) / z);
-					const visH = (scroller.clientHeight || 600) / z;
+					const sy = this.effectiveScaleY();
+					const visTop = Math.max(0, scroller.scrollTop / sy - geo.top);
+					const visH = (scroller.clientHeight || 600) / sy;
 					this.guideOrigin = [Math.max(120, geo.width / 2), visTop + Math.min(180, visH / 3)];
 				}
-				return { geo };
+				return { geo, lineTops };
 			},
-			write: ({ geo }: { geo: Geometry }) => {
-				this.syncCanvasRoom();
-				this.render(geo);
-				this.renderGuide();
-				this.updateZoomSpacer();
+			write: ({ geo, lineTops }: { geo: Geometry; lineTops: Map<number, number> }) => {
+				this.measuredLineTops = lineTops;
+				try {
+					this.syncCanvasRoom();
+					this.render(geo);
+					this.renderGuide();
+					this.updateZoomSpacer();
+				} finally {
+					this.measuredLineTops = null;
+				}
 			},
 		});
 	}
@@ -959,7 +986,7 @@ export class InkView implements PluginValue {
 				if (top + b.maxY > lowestInkY) lowestInkY = top + b.maxY;
 			}
 		}
-		const docH = this.view.contentHeight ?? 0;
+		const docH = (this.view.contentHeight ?? 0) / (this.view.scaleY || 1);
 		const pad = computeCanvasBottomPadding({
 			format: s.pageGuide,
 			docHeight: docH,
@@ -974,45 +1001,51 @@ export class InkView implements PluginValue {
 	}
 
 	private effectiveScaleX(): number {
-		return this.zoom !== 1 ? this.zoom : this.view.scaleX || 1;
+		const cd = this.view.contentDOM;
+		const fallback = this.zoom !== 1 ? this.zoom : this.view.scaleX || 1;
+		return elementBoxScale(cd, cd.getBoundingClientRect(), fallback, fallback).sx;
 	}
 
 	private effectiveScaleY(): number {
-		return this.zoom !== 1 ? this.zoom : this.view.scaleY || 1;
+		const cd = this.view.contentDOM;
+		const fallback = this.zoom !== 1 ? this.zoom : this.view.scaleY || 1;
+		return elementBoxScale(cd, cd.getBoundingClientRect(), fallback, fallback).sy;
 	}
 
 	private readGeometry(view: EditorView): Geometry {
 		const sd = view.scrollDOM;
 		const cd = view.contentDOM;
-		const sx = this.effectiveScaleX();
-		const sy = this.effectiveScaleY();
 		const cRect = cd.getBoundingClientRect();
 		const cs = getComputedStyle(cd);
-		const padL = parseFloat(cs.paddingLeft) || 0;
-		const padR = parseFloat(cs.paddingRight) || 0;
-		const padT = parseFloat(cs.paddingTop) || 0;
+		const fallbackX = this.zoom !== 1 ? this.zoom : view.scaleX || 1;
+		const fallbackY = this.zoom !== 1 ? this.zoom : view.scaleY || 1;
+		const { sx, sy } = elementBoxScale(cd, cRect, fallbackX, fallbackY, cs);
+		const padL = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.borderLeftWidth) || 0);
+		const padT = parseInt(cs.paddingTop) || 0;
+		const borderT = parseFloat(cs.borderTopWidth) || 0;
+		const hasLiveHeight = (cd.offsetHeight > 0 || parseFloat(cs.height) > 0) && cRect.height > 0;
+		const docTop = hasLiveHeight || this.zoom !== 1 ? cRect.top + (borderT + padT) * sy : view.documentTop;
 		if (this.sizerEl && this.svg.parentElement === this.sizerEl) {
 			const hRect = this.sizerEl.getBoundingClientRect();
-			const top = this.zoom !== 1 ? (cRect.top - hRect.top) / sy + padT : (view.documentTop - hRect.top) / sy;
-			const height =
-				this.zoom !== 1
-					? Math.max(0, (cRect.bottom - cRect.top) / sy - padT)
-					: Math.max(0, (cRect.bottom - view.documentTop) / sy);
+			const hCs = getComputedStyle(this.sizerEl);
+			const hBorderL = parseFloat(hCs.borderLeftWidth) || 0;
+			const hBorderT = parseFloat(hCs.borderTopWidth) || 0;
 			return {
-				left: (cRect.left - hRect.left) / sx + padL,
-				top,
-				width: Math.max(0, cd.clientWidth - padL - padR),
-				height,
+				left: (cRect.left - hRect.left) / sx - hBorderL + padL,
+				top: (docTop - hRect.top) / sy - hBorderT,
+				width: Math.max(0, cd.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0)),
+				height: Math.max(0, (cRect.bottom - docTop) / sy),
 			};
 		}
 		const sRect = sd.getBoundingClientRect();
-		const baseLeft = sRect.left - sd.scrollLeft * sx;
-		const baseTop = sRect.top - sd.scrollTop * sy;
-		const docTop = view.documentTop;
+		const sdScaleX = sd.offsetWidth > 0 && sRect.width > 0 ? sRect.width / sd.offsetWidth : 1;
+		const sdScaleY = sd.offsetHeight > 0 && sRect.height > 0 ? sRect.height / sd.offsetHeight : 1;
+		const baseLeft = sRect.left - sd.scrollLeft * sdScaleX;
+		const baseTop = sRect.top - sd.scrollTop * sdScaleY;
 		return {
-			left: (cRect.left - baseLeft) / sx + padL,
-			top: (docTop - baseTop) / sy,
-			width: Math.max(0, cd.clientWidth - padL - padR),
+			left: (cRect.left - baseLeft) / sdScaleX + padL * (sx / sdScaleX),
+			top: (docTop - baseTop) / sdScaleY,
+			width: Math.max(0, cd.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0)),
 			height: Math.max(0, (cRect.bottom - docTop) / sy),
 		};
 	}
@@ -1071,8 +1104,9 @@ export class InkView implements PluginValue {
 		const view = this.view;
 		const doc = view.state.doc;
 		const vp = view.viewport;
-		const vpTop = vp.from <= 0 ? -Infinity : view.lineBlockAt(vp.from).top - CULL_MARGIN;
-		const vpBottom = vp.to >= doc.length ? Infinity : view.lineBlockAt(vp.to).bottom + CULL_MARGIN;
+		const sy = view.scaleY || 1;
+		const vpTop = vp.from <= 0 ? -Infinity : view.lineBlockAt(vp.from).top / sy - CULL_MARGIN;
+		const vpBottom = vp.to >= doc.length ? Infinity : view.lineBlockAt(vp.to).bottom / sy + CULL_MARGIN;
 
 		const hl: Stroke[] = [];
 		const pen: Stroke[] = [];
@@ -1200,8 +1234,10 @@ export class InkView implements PluginValue {
 		const oldScrollLeft = sd.scrollLeft;
 		const oldScrollTop = sd.scrollTop;
 		const sizer = this.sizerEl ?? this.zoomTargetEl();
-		if (prev === 1 && target !== 1 && sizer && sizer.offsetWidth > 0) {
-			this.zoomBaseSizerWidth = sizer.offsetWidth;
+		const anchorEl = sizer ?? this.view.contentDOM;
+		const beforeRect = anchorEl.getBoundingClientRect();
+		if (prev === 1 && target !== 1 && anchorEl && anchorEl.offsetWidth > 0) {
+			this.zoomBaseSizerWidth = anchorEl.offsetWidth;
 		} else if (target === 1) {
 			this.zoomBaseSizerWidth = null;
 		}
@@ -1209,26 +1245,35 @@ export class InkView implements PluginValue {
 		this.applyZoomDom();
 		if (focalClient && prev > 0) {
 			const ratio = target / prev;
-			const fx0 = (prevFocalClient?.x ?? focalClient.x) - sRect.left;
-			const fy0 = (prevFocalClient?.y ?? focalClient.y) - sRect.top;
-			const fx1 = focalClient.x - sRect.left;
-			const fy1 = focalClient.y - sRect.top;
-			sd.scrollLeft = scrollForZoomAnchor(oldScrollLeft, fx0, ratio, fx1);
-			sd.scrollTop = scrollForZoomAnchor(oldScrollTop, fy0, ratio, fy1);
+			const afterRect = anchorEl.getBoundingClientRect();
+			if ((beforeRect.width ?? 0) > 0 && (afterRect.width ?? 0) > 0) {
+				const pf = prevFocalClient ?? focalClient;
+				const curX = afterRect.left + (pf.x - beforeRect.left) * ratio;
+				const curY = afterRect.top + (pf.y - beforeRect.top) * ratio;
+				const sdScaleX = sd.offsetWidth > 0 && sRect.width > 0 ? sRect.width / sd.offsetWidth : 1;
+				const sdScaleY = sd.offsetHeight > 0 && sRect.height > 0 ? sRect.height / sd.offsetHeight : 1;
+				sd.scrollLeft = Math.max(0, sd.scrollLeft + (curX - focalClient.x) / sdScaleX);
+				sd.scrollTop = Math.max(0, sd.scrollTop + (curY - focalClient.y) / sdScaleY);
+			} else {
+				const fx0 = (prevFocalClient?.x ?? focalClient.x) - sRect.left;
+				const fy0 = (prevFocalClient?.y ?? focalClient.y) - sRect.top;
+				const fx1 = focalClient.x - sRect.left;
+				const fy1 = focalClient.y - sRect.top;
+				sd.scrollLeft = scrollForZoomAnchor(oldScrollLeft, fx0, ratio, fx1);
+				sd.scrollTop = scrollForZoomAnchor(oldScrollTop, fy0, ratio, fy1);
+			}
 		}
-		// When the SVG lives inside `.cm-sizer`, text and ink scale rigidly under one CSS transform —
-		// skip re-measuring CM6 geometry / character anchors mid-pinch so letters can never drift.
-		const unified = !!(this.sizerEl && this.svg.parentElement === this.sizerEl);
-		if (!unified || (target === 1 && prev !== 1)) {
-			this.applyGeometry(this.readGeometry(this.view));
-		}
+		this.applyGeometry(this.readGeometry(this.view));
 		this.renderSelection();
 		this.updateZoomBadge();
-		if ((!unified || (target === 1 && prev !== 1)) && Math.abs(target - prev) > 1e-4) this.scheduleRender();
+		if (Math.abs(target - prev) > 1e-4) this.scheduleRender();
 	}
 
 	private zoomTargetEl(): HTMLElement | null {
 		const sd = this.view.scrollDOM;
+		for (let el = this.view.contentDOM?.parentElement ?? null; el && el !== sd; el = el.parentElement) {
+			if (el.classList?.contains("cm-sizer")) return el;
+		}
 		const children = sd.children ? Array.from(sd.children) : [];
 		for (const c of children) {
 			if (c.classList?.contains("cm-sizer")) return c as HTMLElement;
@@ -1239,6 +1284,7 @@ export class InkView implements PluginValue {
 	private applyZoomDom(): void {
 		const z = this.zoom;
 		const sizer = this.sizerEl ?? this.zoomTargetEl();
+		const widthLock = z === 1 || !this.zoomBaseSizerWidth ? "" : `${this.zoomBaseSizerWidth}px`;
 		if (sizer) {
 			sizer.classList.add("pl-zoom-host");
 			if (this.svg.parentElement !== sizer) {
@@ -1248,10 +1294,20 @@ export class InkView implements PluginValue {
 			sizer.classList.toggle("pl-zoom-target", z !== 1);
 			sizer.setCssProps({
 				transform: z === 1 ? "" : `scale(${z})`,
-				width: z === 1 || !this.zoomBaseSizerWidth ? "" : `${this.zoomBaseSizerWidth}px`,
+				width: widthLock,
+				minWidth: widthLock,
+				maxWidth: widthLock,
 			});
 			this.svg.setCssProps({ transform: "" });
 		} else {
+			const cd = this.view.contentDOM;
+			cd.classList?.toggle("pl-zoom-target", z !== 1);
+			cd.setCssProps?.({
+				transform: z === 1 ? "" : `scale(${z})`,
+				width: widthLock,
+				minWidth: widthLock,
+				maxWidth: widthLock,
+			});
 			this.svg.setCssProps({ transform: z === 1 ? "" : `scale(${z})` });
 		}
 		this.updateZoomSpacer();
@@ -1263,7 +1319,11 @@ export class InkView implements PluginValue {
 		const sizer = this.sizerEl ?? this.zoomTargetEl();
 		if (sizer) {
 			sizer.classList.remove("pl-zoom-target");
-			sizer.setCssProps({ transform: "", width: "" });
+			sizer.setCssProps({ transform: "", width: "", minWidth: "", maxWidth: "" });
+		} else {
+			const cd = this.view.contentDOM;
+			cd.classList?.remove("pl-zoom-target");
+			cd.setCssProps?.({ transform: "", width: "", minWidth: "", maxWidth: "" });
 		}
 		this.svg.setCssProps({ transform: "" });
 	}
@@ -1275,13 +1335,13 @@ export class InkView implements PluginValue {
 			this.zoomSpacer = null;
 			return;
 		}
-		const sizer = this.zoomTargetEl();
-		if (!sizer || typeof sd.createDiv !== "function") return;
+		const target = this.sizerEl ?? this.zoomTargetEl() ?? (this.view.contentDOM.offsetWidth > 0 ? this.view.contentDOM : null);
+		if (!target || typeof sd.createDiv !== "function") return;
 		if (!this.zoomSpacer || !this.zoomSpacer.isConnected) {
 			this.zoomSpacer = sd.createDiv({ cls: "pl-zoom-spacer", attr: { "aria-hidden": "true" } });
 		}
-		const w = Math.ceil(Math.max(sizer.offsetWidth, (this.geo?.width ?? 0) + 80) * this.zoom);
-		const h = Math.ceil(Math.max(sizer.offsetHeight, (this.geo?.height ?? 0) + 120) * this.zoom);
+		const w = Math.ceil((target.offsetLeft || 0) + Math.max(target.offsetWidth, (this.geo?.width ?? 0) + 80) * this.zoom);
+		const h = Math.ceil((target.offsetTop || 0) + Math.max(target.offsetHeight, (this.geo?.height ?? 0) + 120) * this.zoom);
 		this.zoomSpacer.style.width = `${w}px`;
 		this.zoomSpacer.style.height = `${h}px`;
 	}
@@ -1736,6 +1796,7 @@ export class InkView implements PluginValue {
 		if (!this.active && !this.guideDrag && !this.guidePinchStart) {
 			if (direct.length === 2) {
 				this.navTap = null;
+				if (e.cancelable) e.preventDefault();
 				const dist = distanceBetween(direct[0], direct[1]);
 				const mid = midpoint(direct[0], direct[1]);
 				if (e.type === "touchstart" || !this.pinch) {
@@ -3265,11 +3326,19 @@ export class InkView implements PluginValue {
 	private pasteTarget(): XY {
 		const sd = this.view.scrollDOM;
 		const geo = this.geo ?? this.readGeometry(this.view);
+		const sx = this.effectiveScaleX();
+		const sy = this.effectiveScaleY();
+		const sRect = sd.getBoundingClientRect();
+		const sdScaleX = sd.offsetWidth > 0 && sRect.width > 0 ? sRect.width / sd.offsetWidth : 1;
+		const sdScaleY = sd.offsetHeight > 0 && sRect.height > 0 ? sRect.height / sd.offsetHeight : 1;
+		const svgRect = this.svg.getBoundingClientRect();
+		const ox = (svgRect.left - sRect.left) / sdScaleX + sd.scrollLeft;
+		const oy = (svgRect.top - sRect.top) / sdScaleY + sd.scrollTop;
 		const vis = {
-			minX: sd.scrollLeft - geo.left,
-			minY: sd.scrollTop - geo.top,
-			maxX: sd.scrollLeft - geo.left + sd.clientWidth,
-			maxY: sd.scrollTop - geo.top + sd.clientHeight,
+			minX: (sd.scrollLeft - ox) * (sdScaleX / sx),
+			minY: (sd.scrollTop - oy) * (sdScaleY / sy),
+			maxX: (sd.scrollLeft + sd.clientWidth - ox) * (sdScaleX / sx),
+			maxY: (sd.scrollTop + sd.clientHeight - oy) * (sdScaleY / sy),
 		};
 		const h = this.hoverAt;
 		if (h && h[0] >= vis.minX && h[0] <= vis.maxX && h[1] >= vis.minY && h[1] <= vis.maxY) return h;
@@ -3339,22 +3408,24 @@ export class InkView implements PluginValue {
 			el.classList.add("pl-hidden");
 			return;
 		}
-		const geo = this.geo;
-		const z = this.zoom || 1;
+		const sx = this.effectiveScaleX();
+		const sy = this.effectiveScaleY();
 		const sd = this.view.scrollDOM;
 		const sRect = sd.getBoundingClientRect();
+		const sdScaleX = sd.offsetWidth > 0 && sRect.width > 0 ? sRect.width / sd.offsetWidth : 1;
+		const sdScaleY = sd.offsetHeight > 0 && sRect.height > 0 ? sRect.height / sd.offsetHeight : 1;
 		const svgRect = this.svg.getBoundingClientRect();
-		const ox = this.sizerEl && this.svg.parentElement === this.sizerEl ? svgRect.left - sRect.left + sd.scrollLeft : geo.left;
-		const oy = this.sizerEl && this.svg.parentElement === this.sizerEl ? svgRect.top - sRect.top + sd.scrollTop : geo.top;
+		const ox = (svgRect.left - sRect.left) / sdScaleX + sd.scrollLeft;
+		const oy = (svgRect.top - sRect.top) / sdScaleY + sd.scrollTop;
 		const target: BBox =
 			this.menu.kind === "paste"
 				? { minX: this.menu.at[0], minY: this.menu.at[1], maxX: this.menu.at[0], maxY: this.menu.at[1] }
 				: box!;
 		const t: BBox = {
-			minX: target.minX * z + ox,
-			minY: target.minY * z + oy,
-			maxX: target.maxX * z + ox,
-			maxY: target.maxY * z + oy,
+			minX: target.minX * (sx / sdScaleX) + ox,
+			minY: target.minY * (sy / sdScaleY) + oy,
+			maxX: target.maxX * (sx / sdScaleX) + ox,
+			maxY: target.maxY * (sy / sdScaleY) + oy,
 		};
 		el.classList.remove("pl-hidden");
 		const w = el.offsetWidth;
@@ -3465,10 +3536,13 @@ export class InkView implements PluginValue {
 	private lineInfoAt(lineNumber: number, svgRect: DOMRect, sx: number): TapLineInfo {
 		const doc = this.view.state.doc;
 		const line = doc.line(lineNumber);
+		const sy = this.view.scaleY || 1;
 		const block = this.view.lineBlockAt(line.from);
+		const top = unzoomedLineTop(this.view, line.from);
+		const height = (block.bottom - block.top) / sy;
 		const endCoords = this.view.coordsAtPos(line.to);
 		const lineEndX = endCoords ? Math.max(0, (endCoords.right - svgRect.left) / sx) : 0;
-		return { top: block.top, bottom: block.bottom, lineTo: line.to, lineEndX };
+		return { top, bottom: top + height, lineTo: line.to, lineEndX };
 	}
 
 	private applyTapToType(clientX: number, clientY: number, target: EventTarget | null): void {
@@ -3479,13 +3553,14 @@ export class InkView implements PluginValue {
 		const rect = this.svg.getBoundingClientRect();
 		const sx = this.effectiveScaleX();
 		const [tapX, tapY] = this.clientToOverlay(clientX, clientY, rect);
-		const lineH = this.view.defaultLineHeight || 24;
-		const charW = this.view.defaultCharacterWidth || 8.5;
+		const sy = this.view.scaleY || 1;
+		const lineH = (this.view.defaultLineHeight || 24) / sy;
+		const charW = (this.view.defaultCharacterWidth || 8.5) / (this.view.scaleX || 1);
 		const doc = this.view.state.doc;
 		const lastLine = this.lineInfoAt(doc.lines, rect, sx);
 		let lineAtTap: TapLineInfo | undefined;
 		if (tapY <= lastLine.bottom + lineH * 0.4) {
-			const block = this.view.lineBlockAtHeight(Math.max(0, tapY));
+			const block = this.view.lineBlockAtHeight(Math.max(0, tapY) * sy);
 			const line = doc.lineAt(block.from);
 			lineAtTap = this.lineInfoAt(line.number, rect, sx);
 		}
@@ -3623,11 +3698,12 @@ export class InkView implements PluginValue {
 		const rect = this.svg.getBoundingClientRect();
 		const sx = this.effectiveScaleX();
 		const doc = this.view.state.doc;
-		const lineH = this.view.defaultLineHeight || 24;
+		const sy = this.view.scaleY || 1;
+		const lineH = (this.view.defaultLineHeight || 24) / sy;
 		const lastLine = this.lineInfoAt(doc.lines, rect, sx);
 		const midY = pending.midY;
 		const targetLine = midY <= lastLine.bottom + lineH * 0.4
-			? doc.lineAt(this.view.lineBlockAtHeight(Math.max(0, midY)).from)
+			? doc.lineAt(this.view.lineBlockAtHeight(Math.max(0, midY) * sy).from)
 			: doc.line(doc.lines);
 		const { prefixNewlines, from } = insertionPosForY(midY, lastLine, lineH, targetLine.to, doc.length);
 		const existingLine = doc.lineAt(from);

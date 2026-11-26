@@ -4,7 +4,7 @@ import obsidianmd from "eslint-plugin-obsidianmd";
 
 export default defineConfig([
 	// Build output, Node build scripts and the local test vault are not plugin code.
-	globalIgnores(["node_modules", "dist", "main.js", "esbuild.config.mjs", "version-bump.mjs", "test-vault", "vitest.config.ts"]),
+	globalIgnores(["node_modules", "dist", "main.js", "esbuild.config.mjs", "version-bump.mjs", "test-vault", "vitest.config.ts", "scripts"]),
 	...obsidianmd.configs.recommended,
 	{
 		languageOptions: {

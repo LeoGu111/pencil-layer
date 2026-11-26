@@ -48,17 +48,82 @@ export interface Origin {
 	sy: number;
 }
 
+/**
+ * Exact live CSS scale `(sx, sy)` of `el` from its `getBoundingClientRect()` divided by its
+ * unscaled CSS border-box size (avoids integer `offsetWidth`/`offsetHeight` rounding drift across
+ * long documents, falling back cleanly when style dimensions aren't available).
+ */
+export function elementBoxScale(
+	el: HTMLElement,
+	rect: { width: number; height: number },
+	fallbackX = 1,
+	fallbackY = 1,
+	cs?: CSSStyleDeclaration,
+): { sx: number; sy: number } {
+	const style = cs ?? getComputedStyle(el);
+	const rawW = parseFloat(style.width);
+	const rawH = parseFloat(style.height);
+	const borderBox = style.boxSizing === "border-box";
+	const boxW =
+		Number.isFinite(rawW) && rawW > 0
+			? borderBox
+				? rawW
+				: rawW +
+					(parseFloat(style.paddingLeft) || 0) +
+					(parseFloat(style.paddingRight) || 0) +
+					(parseFloat(style.borderLeftWidth) || 0) +
+					(parseFloat(style.borderRightWidth) || 0)
+			: el.offsetWidth;
+	const boxH =
+		Number.isFinite(rawH) && rawH > 0
+			? borderBox
+				? rawH
+				: rawH +
+					(parseFloat(style.paddingTop) || 0) +
+					(parseFloat(style.paddingBottom) || 0) +
+					(parseFloat(style.borderTopWidth) || 0) +
+					(parseFloat(style.borderBottomWidth) || 0)
+			: el.offsetHeight;
+	const sx = boxW > 0 && rect.width > 0 ? rect.width / boxW : fallbackX;
+	const sy = boxH > 0 && rect.height > 0 ? rect.height / boxH : fallbackY;
+	return { sx, sy };
+}
+
 /** Client position of the overlay origin (same as InkView.readGeometry: content left + padding, documentTop). */
 export function overlayOrigin(view: EditorView): Origin {
 	const cd = view.contentDOM;
 	const cs = getComputedStyle(cd);
-	const padL = parseFloat(cs.paddingLeft) || 0;
-	const padT = parseFloat(cs.paddingTop) || 0;
+	const padL = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.borderLeftWidth) || 0);
+	const padT = parseInt(cs.paddingTop) || 0;
+	const borderT = parseFloat(cs.borderTopWidth) || 0;
 	const rect = cd.getBoundingClientRect();
-	const sx = cd.offsetWidth > 0 && rect.width > 0 ? rect.width / cd.offsetWidth : (view.scaleX || 1);
-	const sy = cd.offsetHeight > 0 && rect.height > 0 ? rect.height / cd.offsetHeight : (view.scaleY || 1);
-	const y = Math.abs(sy - (view.scaleY || 1)) > 0.005 ? rect.top + padT * sy : view.documentTop;
+	const { sx, sy } = elementBoxScale(cd, rect, view.scaleX || 1, view.scaleY || 1, cs);
+	const y = (cd.offsetHeight > 0 || parseFloat(cs.height) > 0) && rect.height > 0 ? rect.top + (borderT + padT) * sy : view.documentTop;
 	return { x: rect.left + padL * sx, y, sx, sy };
+}
+
+/**
+ * Unzoomed overlay-space top of the document line starting at `lineFrom` (CSS layout px inside `.cm-content`
+ * below `paddingTop`, independent of CodeMirror's scaled `heightMap` / `scaleY`).
+ */
+export function unzoomedLineTop(view: EditorView, lineFrom: number, origin?: Origin): number {
+	const vp = view.viewport;
+	if (vp && lineFrom >= vp.from && lineFrom <= vp.to && typeof view.domAtPos === "function") {
+		try {
+			const { node } = view.domAtPos(lineFrom, 1);
+			const el = (node.nodeType === 1 ? (node as Element) : node.parentElement)?.closest?.(".cm-line");
+			if (el && view.contentDOM.contains(el)) {
+				const r = el.getBoundingClientRect();
+				if (r.height > 0 || r.width > 0) {
+					const o = origin ?? overlayOrigin(view);
+					return (r.top - o.y) / o.sy;
+				}
+			}
+		} catch {
+			/* fall back to heightMap when the line is not currently mounted in DOM */
+		}
+	}
+	return view.lineBlockAt(lineFrom).top / (view.scaleY || 1);
 }
 
 /** Rows (overlay space) of the visible part of a range, from DOM ranges per document line. */
@@ -95,7 +160,8 @@ function measureRange(view: EditorView, range: TextRange, o: Origin): Row[] {
 			pos = line.to + 1;
 		}
 	}
-	return mergeRows(rects, view.defaultLineHeight * MAX_ROW_LINES);
+	const sy = view.scaleY || 1;
+	return mergeRows(rects, (view.defaultLineHeight / sy) * MAX_ROW_LINES);
 }
 
 export interface TextSnap {
@@ -129,7 +195,8 @@ export class TextHighlights {
 		const o = overlayOrigin(view);
 		const posAt = (x: number, y: number) => view.posAtCoords({ x: o.x + x * o.sx, y: o.y + y * o.sy }, false);
 		const doc = view.state.doc;
-		let lh = view.defaultLineHeight;
+		const sy = view.scaleY || 1;
+		let lh = (view.defaultLineHeight || 24) / sy;
 		const c = view.coordsAtPos(posAt((minX + maxX) / 2, cy));
 		if (c) lh = Math.max(lh, (c.bottom - c.top) / o.sy);
 
@@ -169,7 +236,7 @@ export class TextHighlights {
 		if (!snap) return null;
 		const view = this.view;
 		const { anchor, text, lineFrom } = textAnchorOf(view.state.doc, snap.range);
-		const top = view.lineBlockAt(lineFrom).top;
+		const top = unzoomedLineTop(view, lineFrom);
 		const stroke: Stroke = {
 			id: newId(),
 			tool: "highlighter",
