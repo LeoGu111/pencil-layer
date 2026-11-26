@@ -90,6 +90,18 @@ export function projectToEdge([x, y]: XY, [[ax, ay], [bx, by]]: GuideEdge): XY {
 	return [ax + t * dx, ay + t * dy];
 }
 
+/**
+ * Unclamped projection onto the infinite line extending a guide edge, so users can pull a straight
+ * stroke smoothly past either end of the ruler/set-square instead of hitting an invisible wall.
+ */
+export function projectToInfiniteEdge([x, y]: XY, [[ax, ay], [bx, by]]: GuideEdge): XY {
+	const dx = bx - ax;
+	const dy = by - ay;
+	const length2 = dx * dx + dy * dy;
+	const t = length2 === 0 ? 0 : ((x - ax) * dx + (y - ay) * dy) / length2;
+	return [ax + t * dx, ay + t * dy];
+}
+
 /** Capture the nearest edge only when the stroke starts close enough. */
 export function nearestGuideEdge(point: XY, edges: readonly GuideEdge[], tolerance: number): GuideEdge | null {
 	let best: GuideEdge | null = null;

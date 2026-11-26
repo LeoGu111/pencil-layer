@@ -76,6 +76,13 @@ describe("ownedRange (strokes → sections)", () => {
 		const r = ownedRange(edited, 4, 5);
 		expect(line >= r.from && line <= r.to).toBe(true);
 	});
+	it("treats NBSP tap-to-type lines as non-blank so sections never overlap and duplicate ink", () => {
+		const doc = ["\u00A0", "", "\u00A0\u00A0", "", "Text"];
+		// Section 0 is line 0 (NBSP), Section 1 is line 2 (NBSP), Section 2 is line 4 (Text).
+		expect(ownedRange(doc, 0, 0)).toEqual({ from: 0, to: 1 });
+		expect(ownedRange(doc, 2, 2)).toEqual({ from: 2, to: 3 });
+		expect(ownedRange(doc, 4, 4)).toEqual({ from: 4, to: 4 });
+	});
 });
 
 describe("lineTop (y-mapping)", () => {

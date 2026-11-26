@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	nearestGuideEdge,
 	projectToEdge,
+	projectToInfiniteEdge,
 	rulerEdges,
 	rulerGeometry,
 	snapGuideAngle,
@@ -29,6 +30,9 @@ describe("geometryGuide (straight ruler & multi-touch)", () => {
 		const snapped = nearestGuideEdge([180, 74], edges, 12);
 		expect(snapped).not.toBeNull();
 		expect(projectToEdge([180, 74], snapped!)).toEqual([180, 80]);
+		// Unclamped projection lets strokes extend cleanly past either end of the ruler.
+		expect(projectToInfiniteEdge([450, 74], snapped!)).toEqual([450, 80]);
+		expect(projectToInfiniteEdge([20, 92], snapped!)).toEqual([20, 80]);
 	});
 
 	it("computes two-finger drag and rotation transforms with angle snapping", () => {

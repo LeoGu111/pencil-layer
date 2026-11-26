@@ -114,6 +114,8 @@ interface Layout {
 	yScale?: number;
 	/** Printable sheet height in px during PDF export (for clean multi-page slicing). */
 	pageHeight?: number;
+	/** Optional per-render deduplication set so a stroke is never painted twice across sections. */
+	drawnIds?: Set<string>;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -457,21 +459,31 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	const texts: { s: Stroke; line: number; pieces: { line: number; from: number; to: number }[] }[] = [];
 	for (const s of strokes) {
 		if (s.points.length === 0 && !s.text) continue;
+		if (lay.drawnIds?.has(s.id)) continue;
 		const line = resolveLine(s, lines);
 		if (s.text && s.tool === "highlighter") {
 			const endLine = Math.min(lines.length - 1, Math.max(line, line + s.text.endLine - s.anchor.line));
 			const pieces = rangePieces(lines, line, s.text.ch, endLine, s.text.endCh).filter((p) => p.line >= lineStart && p.line <= lineEnd);
 			const owner = line >= range.from && line <= range.to;
-			if (pieces.length > 0 || owner) texts.push({ s, line, pieces });
+			if (pieces.length > 0 || owner) {
+				texts.push({ s, line, pieces });
+				if (owner) lay.drawnIds?.add(s.id);
+			}
 			continue;
 		}
 		if (s.char) {
 			// [Stage H] drawn by the section owning its character's line (where the character is).
 			const charLine = Math.min(lines.length - 1, Math.max(0, line + s.char.line - s.anchor.line));
-			if (charLine >= range.from && charLine <= range.to) own.push({ s, line, charLine });
+			if (charLine >= range.from && charLine <= range.to) {
+				own.push({ s, line, charLine });
+				lay.drawnIds?.add(s.id);
+			}
 			continue;
 		}
-		if (line >= range.from && line <= range.to) own.push({ s, line });
+		if (line >= range.from && line <= range.to) {
+			own.push({ s, line });
+			lay.drawnIds?.add(s.id);
+		}
 	}
 	const existing = Array.from(el.children).filter((c) => c.classList.contains(SVG_CLASS));
 	removeSpaces(el);
@@ -647,6 +659,7 @@ async function waitImages(el: HTMLElement, ms: number): Promise<void> {
 export class ReadingInk {
 	private readonly sections = new Map<string, Set<Section>>();
 	private readonly byEl = new WeakMap<HTMLElement, Section>();
+	private readonly printedRoots = new WeakSet<HTMLElement>();
 	private readonly scheduled = new Set<string>();
 	private timer: number | null = null;
 
@@ -708,6 +721,10 @@ export class ReadingInk {
 	// ----- Reading view ---------------------------------------------------------------------
 
 	private attach(el: HTMLElement, path: string, ctx: MarkdownPostProcessorContext): void {
+		// Ignore elements nested inside an already-attached reading section host so child blocks
+		// never paint a second copy of the parent section's ink.
+		const parentHost = el.parentElement?.closest(`.${HOST_CLASS}`);
+		if (parentHost && parentHost !== el) return;
 		let sec = this.byEl.get(el);
 		if (!sec) {
 			const child = new MarkdownRenderChild(el);
@@ -762,17 +779,47 @@ export class ReadingInk {
 			this.timer = null;
 			const paths = [...this.scheduled];
 			this.scheduled.clear();
-			for (const p of paths) for (const sec of [...(this.sections.get(p) ?? [])]) this.layout(sec);
+			for (const p of paths) this.layoutPath(p);
 		}, 0);
 	}
 
-	private layout(sec: Section): void {
+	/** Lay out all attached Reading-view sections of one note in line order with stroke deduplication. */
+	private layoutPath(path: string): void {
+		const list = [...(this.sections.get(path) ?? [])];
+		if (list.length === 0) return;
+		const withInfo: { sec: Section; info: { text: string; lineStart: number; lineEnd: number } | null }[] = list.map((sec) => {
+			let info: { text: string; lineStart: number; lineEnd: number } | null = null;
+			try {
+				info = sec.ctx.getSectionInfo(sec.el);
+			} catch {
+				info = null;
+			}
+			return { sec, info };
+		});
+		withInfo.sort((a, b) => (a.info?.lineStart ?? Infinity) - (b.info?.lineStart ?? Infinity));
+		const drawnIds = new Set<string>();
+		for (let i = 0; i < withInfo.length; i++) {
+			const { sec, info } = withInfo[i];
+			const nextInfo = withInfo.slice(i + 1).find((x) => x.info && x.sec.el.isConnected && x.sec.el.getClientRects().length > 0)?.info;
+			const nextStart = nextInfo ? nextInfo.lineStart : undefined;
+			this.layout(sec, info, drawnIds, nextStart);
+		}
+	}
+
+	private layout(
+		sec: Section,
+		preInfo?: { text: string; lineStart: number; lineEnd: number } | null,
+		drawnIds?: Set<string>,
+		nextStart?: number,
+	): void {
 		const { el } = sec;
-		let info: { text: string; lineStart: number; lineEnd: number } | null = null;
-		try {
-			info = sec.ctx.getSectionInfo(el);
-		} catch {
-			info = null;
+		let info = preInfo;
+		if (info === undefined) {
+			try {
+				info = sec.ctx.getSectionInfo(el);
+			} catch {
+				info = null;
+			}
 		}
 		if (!info) {
 			// Section re-rendered/discarded (its replacement registers itself).
@@ -791,11 +838,11 @@ export class ReadingInk {
 			return;
 		}
 		const lines = splitLines(info.text);
-		const range = ownedRange(lines, info.lineStart, info.lineEnd);
+		const range = ownedRange(lines, info.lineStart, info.lineEnd, nextStart !== undefined ? { nextStart } : {});
 		try {
 			// [Stage K] "Show ink" off: spaces still take their room (the layout never changes).
 			const shown = this.host.getSettings().inkVisible ? ink : { ...ink, strokes: [] };
-			drawSection(el, { lines, lineStart: info.lineStart, lineEnd: info.lineEnd, range, print: false }, shown);
+			drawSection(el, { lines, lineStart: info.lineStart, lineEnd: info.lineEnd, range, print: false, drawnIds }, shown);
 		} catch (err) {
 			console.error("[pencil-layer] reading view ink failed", err);
 		}
@@ -804,6 +851,9 @@ export class ReadingInk {
 	// ----- PDF export -----------------------------------------------------------------------
 
 	private processPrint(el: HTMLElement, path: string, ctx: MarkdownPostProcessorContext): Promise<void> | void {
+		const printRoot = el.parentElement?.classList.contains("print") ? el.parentElement : el;
+		if (this.printedRoots.has(printRoot)) return;
+		this.printedRoots.add(printRoot);
 		// [Stage H] one-shot export override, else the toggle / default style
 		const { include: withInk, style } = this.host.printOptions();
 		// Document style first (synchronously, even without ink): everything measured below — block
@@ -913,15 +963,16 @@ export class ReadingInk {
 
 	private drawHosts(container: HTMLElement, lines: readonly string[], hosts: Host[], ink: InkFile, yScale: number, pageHeight: number): void {
 		if (isEmptyInk(ink)) return;
+		const drawnIds = new Set<string>();
 		if (hosts.length === 0) {
 			// No metadata: the whole note as one block (proportional placement).
-			drawSection(container, { lines, lineStart: 0, lineEnd: lines.length - 1, range: { from: 0, to: lines.length - 1 }, print: true, yScale, pageHeight }, ink);
+			drawSection(container, { lines, lineStart: 0, lineEnd: lines.length - 1, range: { from: 0, to: lines.length - 1 }, print: true, yScale, pageHeight, drawnIds }, ink);
 			return;
 		}
 		hosts.forEach((h, i) => {
 			const nextStart = i + 1 < hosts.length ? hosts[i + 1].lineStart : lines.length;
 			const range = ownedRange(lines, h.lineStart, h.lineEnd, { nextStart, isFirst: i === 0 });
-			drawSection(h.el, { lines, lineStart: h.lineStart, lineEnd: h.lineEnd, range, print: true, yScale, pageHeight }, ink);
+			drawSection(h.el, { lines, lineStart: h.lineStart, lineEnd: h.lineEnd, range, print: true, yScale, pageHeight, drawnIds }, ink);
 		});
 	}
 

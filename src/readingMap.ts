@@ -36,7 +36,13 @@ export interface LineRange {
 	to: number;
 }
 
-export const isBlank = (s: string | undefined): boolean => s === undefined || s.trim() === "";
+/**
+ * True only for Markdown blank lines (empty or ASCII spaces/tabs).
+ * Importantly, U+00A0 (NBSP, used by tap-to-type horizontal padding) renders as a real paragraph
+ * in CommonMark/Obsidian and must NOT be treated as blank — otherwise every NBSP paragraph claims
+ * all lines before and after it and duplicates the note's ink across every section.
+ */
+export const isBlank = (s: string | undefined): boolean => s === undefined || /^[ \t\r]*$/.test(s);
 
 /**
  * Lines a section owns (inclusive, 0-based): its own lines, the blank lines after it, and — for

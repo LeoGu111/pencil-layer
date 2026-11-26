@@ -14,7 +14,8 @@ import type { ExportChoice, ExportOptions } from "./exportOnce";
 import { DocFont, ExportStyle, styleExportLabel } from "./docStyle";
 import { PAGE_GUIDE_FORMATS, PAGE_GUIDE_LABELS, PageGuideFormat, nextPageGuide } from "./pageGuides";
 import { PENCIL_GESTURE_ACTIONS, PencilGestureAction, PencilGestureDetail, resolvePencilAction, resolvePencilGesture } from "./pencilGestures";
-import { AssistantLaunchOptions, GEMINI_MODELS, GEMINI_WEB_URL, GeminiAssistantModal, GeminiModel } from "./aiAssistant";
+import { AssistantLaunchOptions, GEMINI_MODELS, GEMINI_VIEW_TYPE, GEMINI_WEB_URL, GeminiAssistantModal, GeminiModel } from "./aiAssistant";
+import { GeminiWebView } from "./geminiView";
 import {
 	ActiveTool,
 	DEFAULT_PEN_WIDTHS,
@@ -98,6 +99,7 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 		this.store = new InkStore(new VaultInkAdapter(this.app.vault), { root: normalizePath(this.settings.inkFolder) });
 
 		this.registerEditorExtension(inkExtension(this));
+		this.registerView(GEMINI_VIEW_TYPE, (leaf) => new GeminiWebView(leaf));
 		// [Stage D] Ink in Reading view + PDF export (post-processor, export commands).
 		this.reading = new ReadingInk(this);
 		this.reading.install(this);
@@ -289,9 +291,22 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 				setApiKey: (key) => this.updateSettings({ geminiApiKey: key }),
 				getModel: () => this.settings.geminiModel,
 				setModel: (model) => this.updateSettings({ geminiModel: model }),
+				openSidebar: () => this.openGeminiSidebar(),
 			},
 			opts,
 		).open();
+	}
+
+	async openGeminiSidebar(): Promise<void> {
+		const { workspace } = this.app;
+		let leaf = workspace.getLeavesOfType(GEMINI_VIEW_TYPE)[0];
+		if (!leaf) {
+			const right = workspace.getRightLeaf(false);
+			if (!right) return;
+			leaf = right;
+			await leaf.setViewState({ type: GEMINI_VIEW_TYPE, active: true });
+		}
+		await workspace.revealLeaf(leaf);
 	}
 
 	openAssistantForView(view: MarkdownView): void {
@@ -584,6 +599,13 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 				const v = this.activeMarkdownView();
 				if (v) this.openAssistantForView(v);
 				else this.openAssistant();
+			},
+		});
+		this.addCommand({
+			id: "open-gemini-sidebar",
+			name: "Open Gemini account sidebar (Google AI Pro)",
+			callback: () => {
+				void this.openGeminiSidebar();
 			},
 		});
 		// [Stage H] one-shot: they apply to that export only ("Include ink in PDF export" stays as set).

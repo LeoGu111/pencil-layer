@@ -1,13 +1,18 @@
 /**
- * In-app Google Gemini AI Assistant + Google AI Pro (gemini.google.com) quick handoff.
+ * Account-first Google Gemini / Google AI Pro integration for Ink Pages.
  *
- * - Direct in-app chat (supports text questions, current note context, and attached handwritten
- *   ink/formula PNG images from the Lasso menu) via the official Google Gemini API using Obsidian's
- *   `requestUrl` (bypasses iOS WKWebView CORS).
- * - Quick handoff to `https://gemini.google.com/app` for users who want to use their Google AI Pro
- *   consumer web subscription directly without an API key (copies prompt + context to clipboard).
+ * - **Desktop (Electron):** Native Obsidian sidebar pane (`GeminiWebView`) embedding
+ *   `https://gemini.google.com/app` in a persistent `<webview>` partition so users sign in directly
+ *   with their Google Account (Google AI Pro) — zero API key required.
+ * - **iPad / iPadOS (WKWebView) & Desktop Modal:** Account-first workflow with 1-tap clipboard
+ *   handoff (copies handwritten sketch/formula PNG image or question + note context directly to
+ *   the system clipboard and opens `https://gemini.google.com/app` in your logged-in Google AI Pro
+ *   account — ideal side-by-side in iPad Split View / Slide Over).
+ * - **Optional Advanced Mode:** Collapsible direct Gemini API mode (`requestUrl`) for users who
+ *   choose to paste an optional Google AI Studio key for direct in-app replies & Vision LaTeX.
  */
-import { App, Modal, Notice, requestUrl } from "obsidian";
+import { App, Modal, Notice, Platform, requestUrl } from "obsidian";
+import { copyPngToClipboard } from "./screenshot";
 
 export type GeminiModel = "gemini-2.5-flash" | "gemini-2.5-pro";
 
@@ -16,6 +21,7 @@ export const GEMINI_MODELS: readonly { value: GeminiModel; label: string }[] = [
 	{ value: "gemini-2.5-pro", label: "Gemini 2.5 Pro (tiefes Denken)" },
 ];
 
+export const GEMINI_VIEW_TYPE = "ink-pages-gemini-view";
 export const GEMINI_WEB_URL = "https://gemini.google.com/app";
 export const GEMINI_API_KEY_URL = "https://aistudio.google.com/apikey";
 
@@ -47,6 +53,8 @@ export interface AssistantHost {
 	setApiKey(key: string): void;
 	getModel(): GeminiModel;
 	setModel(model: GeminiModel): void;
+	/** Opens the embedded Gemini account sidebar pane (desktop Electron). */
+	openSidebar?(): Promise<void>;
 }
 
 /** Build the combined text prompt sent to Gemini web (Google AI Pro) when handing off via clipboard. */
@@ -61,10 +69,38 @@ export function buildWebHandoffPrompt(question: string, noteTitle?: string, note
 	return parts.join("\n").trim();
 }
 
-/** Call Google Gemini `generateContent` via Obsidian `requestUrl` (works on iPad & Desktop). */
+/** Convert base64 PNG data (no prefix) into a PNG Blob for system clipboard copying. */
+export function base64ToPngBlob(base64Png: string): Blob {
+	const bin = atob(base64Png);
+	const bytes = new Uint8Array(bin.length);
+	for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+	return new Blob([bytes], { type: "image/png" });
+}
+
+/** Copy a handwritten PNG image to the system clipboard and open Gemini (Google AI Pro). */
+export async function handoffImageToGeminiAccount(base64Png: string, openSidebar?: () => Promise<void>): Promise<void> {
+	try {
+		const blob = Promise.resolve(base64ToPngBlob(base64Png));
+		const copied = await copyPngToClipboard(blob);
+		if (copied) {
+			new Notice("Handschrift als Bild kopiert — einfach in Gemini (Google-Konto) einfügen!", 4000);
+		} else {
+			new Notice("Gemini wird geöffnet — bitte Bild ggf. per Screenshot teilen.", 3500);
+		}
+	} catch {
+		new Notice("Gemini wird geöffnet…", 2500);
+	}
+	if (!Platform.isMobile && openSidebar) {
+		await openSidebar();
+	} else {
+		window.open(GEMINI_WEB_URL, "_blank", "noopener");
+	}
+}
+
+/** Call Google Gemini `generateContent` via Obsidian `requestUrl` (optional API mode). */
 export async function askGemini(req: GeminiRequest): Promise<string> {
 	const key = req.apiKey.trim();
-	if (!key) throw new Error("Kein Gemini API-Key hinterlegt.");
+	if (!key) throw new Error("Kein optionaler Gemini API-Key hinterlegt.");
 
 	const contents: { role: "user" | "model"; parts: Record<string, unknown>[] }[] = [];
 	for (const h of req.history ?? []) {
@@ -129,7 +165,7 @@ const QUICK_PROMPTS_TEXT = [
 const QUICK_PROMPTS_IMAGE = [
 	{ label: "Rechnung prüfen", prompt: "Prüfe diese handschriftliche Rechnung Schritt für Schritt auf Fehler." },
 	{ label: "Erklären", prompt: "Erkläre diese handschriftliche Skizze / Formel verständlich." },
-	{ label: "Als LaTeX", prompt: "Wandle diese handschriftliche Formel in sauberes Obsidian-LaTeX um." },
+	{ label: "Als LaTeX", prompt: "Wandle diese handschriftliche Formel in sauberes Obsidian-LaTeX ($...$ / $$...$$) um." },
 	{ label: "Weiterlösen", prompt: "Löse diese Aufgabe Schritt für Schritt weiter und erkläre jeden Schritt." },
 ] as const;
 
@@ -139,7 +175,7 @@ export class GeminiAssistantModal extends Modal {
 	private busy = false;
 	private threadEl!: HTMLElement;
 	private inputEl!: HTMLTextAreaElement;
-	private sendBtn!: HTMLButtonElement;
+	private sendBtn: HTMLButtonElement | null = null;
 	private statusEl!: HTMLElement;
 
 	constructor(
@@ -154,62 +190,38 @@ export class GeminiAssistantModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		this.modalEl.addClass("pl-ai-modal");
-		this.titleEl.setText("Gemini KI-Assistent");
+		this.titleEl.setText("Gemini (Google AI Pro)");
 
-		// Model + API key quick status bar
-		const topBar = contentEl.createDiv({ cls: "pl-ai-topbar" });
-		const modelSelect = topBar.createEl("select", { cls: "dropdown pl-ai-model" });
-		for (const m of GEMINI_MODELS) {
-			const opt = modelSelect.createEl("option", { value: m.value, text: m.label });
-			if (m.value === this.host.getModel()) opt.selected = true;
+		const hasKey = this.host.getApiKey().trim().length > 0;
+
+		// Account-first hero card (zero API key needed!)
+		const accountCard = contentEl.createDiv({ cls: "pl-ai-account-card" });
+		const accountText = accountCard.createDiv({ cls: "pl-ai-account-desc" });
+		if (Platform.isDesktopApp) {
+			accountText.setText(
+				"Melde dich direkt mit deinem Google-Konto (Google AI Pro) in der Obsidian-Seitenleiste an — ganz ohne API-Key.",
+			);
+		} else {
+			accountText.setText(
+				"Nutze dein Google AI Pro Konto ohne API-Key: Frage oder Handschrift-Bild wird kopiert und direkt in Gemini (ideal im iPad Split View) geöffnet. (Hinweis: Google blockiert Konto-Logins in eingebetteten iPadOS-WebViews.)",
+			);
 		}
-		modelSelect.addEventListener("change", () => {
-			this.host.setModel(modelSelect.value as GeminiModel);
+		const accountActions = accountCard.createDiv({ cls: "pl-ai-account-actions" });
+		if (this.opts.imageBase64Png) {
+			const imgBtn = accountActions.createEl("button", {
+				cls: "mod-cta",
+				text: Platform.isDesktopApp ? "Bild kopieren & Gemini-Seitenleiste öffnen" : "Bild kopieren & in Gemini (Konto) öffnen ↗",
+			});
+			imgBtn.addEventListener("click", () => {
+				const openSidebar = this.host.openSidebar ? () => this.host.openSidebar!() : undefined;
+				void handoffImageToGeminiAccount(this.opts.imageBase64Png!, openSidebar).then(() => this.close());
+			});
+		}
+		const textProBtn = accountActions.createEl("button", {
+			cls: this.opts.imageBase64Png ? "" : "mod-cta",
+			text: Platform.isDesktopApp ? "Frage kopieren & Gemini-Seitenleiste öffnen" : "Frage + Kontext kopieren & Gemini öffnen ↗",
 		});
-
-		const openProBtn = topBar.createEl("button", {
-			cls: "pl-ai-pro-btn",
-			text: "In Google AI Pro öffnen",
-		});
-		openProBtn.addEventListener("click", () => void this.openInGoogleAiPro());
-
-		// Honest info banner when no Gemini API key is configured yet
-		const keyRow = contentEl.createDiv({ cls: "pl-ai-key-box" });
-		const renderKeyBox = () => {
-			keyRow.empty();
-			const hasKey = this.host.getApiKey().trim().length > 0;
-			if (hasKey) {
-				keyRow.addClass("pl-hidden");
-				return;
-			}
-			keyRow.removeClass("pl-hidden");
-			keyRow.createDiv({
-				cls: "pl-ai-info",
-				text: "Hinweis zum Google AI Pro Abo: Google erlaubt Drittanbieter-Apps leider keinen direkten Login ins Consumer-Abo (gemini.google.com). Für direkte Antworten in der App brauchst du einen kostenlosen Google AI Studio API-Key (funktioniert auch für den Formel-Umwandler!) — oder nutze oben „In Google AI Pro öffnen“.",
-			});
-			const row = keyRow.createDiv({ cls: "pl-ai-key-row" });
-			const keyInput = row.createEl("input", {
-				type: "password",
-				placeholder: "Gemini API-Key einfügen (AIza...)",
-				cls: "pl-ai-key-input",
-			});
-			const saveKeyBtn = row.createEl("button", { cls: "mod-cta", text: "Speichern" });
-			saveKeyBtn.addEventListener("click", () => {
-				const k = keyInput.value.trim();
-				if (!k) return;
-				this.host.setApiKey(k);
-				new Notice("Gemini API-Key gespeichert (lokal auf diesem Gerät).");
-				renderKeyBox();
-			});
-			const getKeyLink = row.createEl("a", {
-				text: "Key holen ↗",
-				href: GEMINI_API_KEY_URL,
-				cls: "pl-ai-key-link",
-			});
-			getKeyLink.setAttribute("target", "_blank");
-			getKeyLink.setAttribute("rel", "noopener");
-		};
-		renderKeyBox();
+		textProBtn.addEventListener("click", () => void this.openInGoogleAiPro());
 
 		// Attached handwritten selection preview (if launched from Lasso)
 		if (this.opts.imageBase64Png) {
@@ -218,7 +230,7 @@ export class GeminiAssistantModal extends Modal {
 				cls: "pl-ai-attachment-img",
 				attr: { src: `data:image/png;base64,${this.opts.imageBase64Png}`, alt: "Ausgewählte Handschrift" },
 			});
-			att.createSpan({ cls: "pl-ai-attachment-label", text: "Handschrift-Auswahl angehängt" });
+			att.createSpan({ cls: "pl-ai-attachment-label", text: "Handschrift-Auswahl bereit zum Kopieren / Senden" });
 		}
 
 		// Context toggle if note text exists
@@ -246,10 +258,6 @@ export class GeminiAssistantModal extends Modal {
 			});
 		}
 
-		// Chat thread
-		this.threadEl = contentEl.createDiv({ cls: "pl-ai-thread" });
-		this.statusEl = contentEl.createDiv({ cls: "pl-ai-status pl-hidden" });
-
 		// Input bar
 		const composer = contentEl.createDiv({ cls: "pl-ai-composer" });
 		this.inputEl = composer.createEl("textarea", {
@@ -257,19 +265,61 @@ export class GeminiAssistantModal extends Modal {
 			attr: {
 				rows: "2",
 				placeholder: this.opts.imageBase64Png
-					? "Frage zur Auswahl stellen (z. B. Prüfe meine Rechnung)..."
-					: "Frage an Gemini stellen...",
+					? "Frage zur Auswahl (z. B. Prüfe meine Rechnung / Wandle in LaTeX um)..."
+					: "Frage an dein Gemini-Konto schreiben...",
 			},
 		});
 		if (this.opts.initialPrompt) this.inputEl.value = this.opts.initialPrompt;
 		this.inputEl.addEventListener("keydown", (e) => {
 			if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
 				e.preventDefault();
-				void this.send();
+				if (this.host.getApiKey().trim()) void this.send();
+				else void this.openInGoogleAiPro();
 			}
 		});
-		this.sendBtn = composer.createEl("button", { cls: "mod-cta pl-ai-send", text: "Senden" });
-		this.sendBtn.addEventListener("click", () => void this.send());
+		if (hasKey) {
+			this.sendBtn = composer.createEl("button", { cls: "mod-cta pl-ai-send", text: "Direkt senden" });
+			this.sendBtn.addEventListener("click", () => void this.send());
+		}
+
+		// Chat thread (used when optional API key is active)
+		this.threadEl = contentEl.createDiv({ cls: "pl-ai-thread" });
+		this.statusEl = contentEl.createDiv({ cls: "pl-ai-status pl-hidden" });
+
+		// Collapsible optional API section (tucked away, never nags!)
+		const adv = contentEl.createEl("details", { cls: "pl-ai-advanced" });
+		adv.createEl("summary", {
+			text: hasKey ? "Direkt-Modus aktiv (API-Key / Modell ändern)" : "Optional: Direktantwort in Obsidian ohne App-Wechsel (API-Key)",
+		});
+		const advBody = adv.createDiv({ cls: "pl-ai-advanced-body" });
+		const modelSelect = advBody.createEl("select", { cls: "dropdown pl-ai-model" });
+		for (const m of GEMINI_MODELS) {
+			const opt = modelSelect.createEl("option", { value: m.value, text: m.label });
+			if (m.value === this.host.getModel()) opt.selected = true;
+		}
+		modelSelect.addEventListener("change", () => {
+			this.host.setModel(modelSelect.value as GeminiModel);
+		});
+		const row = advBody.createDiv({ cls: "pl-ai-key-row" });
+		const keyInput = row.createEl("input", {
+			type: "password",
+			placeholder: "Optionaler Gemini API-Key (AIza...)",
+			cls: "pl-ai-key-input",
+			value: this.host.getApiKey(),
+		});
+		const saveKeyBtn = row.createEl("button", { text: "Speichern" });
+		saveKeyBtn.addEventListener("click", () => {
+			this.host.setApiKey(keyInput.value.trim());
+			new Notice("Gespeichert.");
+			this.onOpen();
+		});
+		const getKeyLink = row.createEl("a", {
+			text: "Kostenloser Key ↗",
+			href: GEMINI_API_KEY_URL,
+			cls: "pl-ai-key-link",
+		});
+		getKeyLink.setAttribute("target", "_blank");
+		getKeyLink.setAttribute("rel", "noopener");
 	}
 
 	onClose(): void {
@@ -282,12 +332,18 @@ export class GeminiAssistantModal extends Modal {
 		try {
 			if (payload && navigator.clipboard?.writeText) {
 				await navigator.clipboard.writeText(payload);
-				new Notice("Frage & Kontext kopiert — einfach in Gemini (Google AI Pro) einfügen!", 3500);
+				new Notice("Frage & Notiz-Kontext kopiert — einfach in Gemini (Google-Konto) einfügen!", 3800);
 			}
 		} catch {
-			/* ignore clipboard errors on restricted environments */
+			/* ignore */
 		}
-		window.open(GEMINI_WEB_URL, "_blank", "noopener");
+		if (Platform.isDesktopApp && this.host.openSidebar) {
+			await this.host.openSidebar();
+			this.close();
+		} else {
+			window.open(GEMINI_WEB_URL, "_blank", "noopener");
+			this.close();
+		}
 	}
 
 	private appendMessage(msg: GeminiMessage): void {
@@ -319,11 +375,11 @@ export class GeminiAssistantModal extends Modal {
 		if (!prompt) return;
 		const apiKey = this.host.getApiKey().trim();
 		if (!apiKey) {
-			new Notice("Bitte erst einen Gemini API-Key eingeben oder „In Google AI Pro öffnen“ nutzen.");
+			await this.openInGoogleAiPro();
 			return;
 		}
 		this.busy = true;
-		this.sendBtn.disabled = true;
+		if (this.sendBtn) this.sendBtn.disabled = true;
 		this.inputEl.value = "";
 		this.appendMessage({ role: "user", text: prompt });
 		this.statusEl.removeClass("pl-hidden");
@@ -345,7 +401,7 @@ export class GeminiAssistantModal extends Modal {
 			this.appendMessage({ role: "model", text: `Fehler: ${msg}` });
 		} finally {
 			this.busy = false;
-			this.sendBtn.disabled = false;
+			if (this.sendBtn) this.sendBtn.disabled = false;
 			this.statusEl.addClass("pl-hidden");
 		}
 	}
