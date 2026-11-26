@@ -203,6 +203,7 @@ export function spaceLayout(view: EditorView): SpaceBox[] {
 // ---------------------------------------------------------------------------------------------
 
 export interface SpaceActions {
+	canResize(id: string): boolean;
 	/** The resize handle moved: show this height now (not saved). */
 	resizeLive(id: string, height: number): void;
 	/** The resize handle was released (one undo step), or cancelled (`height` null). */
@@ -294,6 +295,7 @@ export class SpaceControls {
 			c.more.style.top = `${b.top}px`;
 			c.handle.style.left = `${width / 2 - 40}px`;
 			c.handle.style.top = `${b.top + b.height - 20}px`;
+			c.handle.style.display = this.actions.canResize(b.id) ? "" : "none";
 			if (this.openId === b.id) {
 				if (!c.panel) c.panel = this.makePanel(b.id);
 				c.panel.style.left = `${width - 168}px`;
@@ -421,7 +423,7 @@ export class SpaceControls {
 
 /** A space with its ink, as moved by a text Cut/Paste. `after.line` is valid in the doc where it is added. */
 export interface MovedSpace {
-	space: { id: string; after: { line: number; hash: string }; height: number };
+	space: { id: string; after: { line: number; hash: string }; height: number; a4?: true };
 	strokes: Stroke[];
 }
 

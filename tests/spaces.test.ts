@@ -18,10 +18,12 @@ import {
 	spaceMinHeight,
 } from "../src/model";
 import {
+	A4_SPACE_HEIGHT,
 	GROW_ROOM,
 	GROW_ZONE,
 	LaidLine,
 	blockEnds,
+	boundSpaceY,
 	defaultSpaceHeight,
 	displayLine,
 	endSpacePlan,
@@ -33,8 +35,10 @@ import {
 	shiftBelowSpaces,
 	spaceAt,
 	spaceSlots,
+	spaceSize,
 } from "../src/spaces";
 import { InkAdapter, InkStore, TimerApi } from "../src/store";
+import { printAreaHeight } from "../src/readingMap";
 
 const stroke = (over: Partial<Stroke> = {}): Stroke => ({
 	id: "s1",
@@ -379,6 +383,31 @@ describe("blocks: where a space is shown", () => {
 });
 
 describe("ink → space; growth; resize", () => {
+	it("creates one printable A4 page and starts another page past its bottom", () => {
+		expect(spaceSize(240, false)).toEqual({ height: 240 });
+		expect(spaceSize(240, true)).toEqual({ a4: true, height: A4_SPACE_HEIGHT });
+		expect(printAreaHeight({ pageSize: "A4" }) - A4_SPACE_HEIGHT).toBeGreaterThanOrEqual(2);
+		expect(printAreaHeight({ pageSize: "A4" }) - A4_SPACE_HEIGHT).toBeLessThan(3);
+		const last = { id: "A", top: 20, end: true, ...spaceSize(50, true) };
+		const top = 20 + A4_SPACE_HEIGHT;
+		expect(endSpacePlan(last, 20, 5000, true)).toEqual({ extend: null, top, height: A4_SPACE_HEIGHT });
+		expect(endSpacePlan(last, 20, top + 20)).toMatchObject({ extend: null, top });
+		expect(boundSpaceY(-15, A4_SPACE_HEIGHT, 2)).toBe(2);
+		expect(boundSpaceY(5000, A4_SPACE_HEIGHT, 2)).toBe(A4_SPACE_HEIGHT - SPACE_INK_PAD - 2);
+	});
+
+	it("round-trips a fixed A4 page and rejects store resize operations", async () => {
+		const fixed: InkSpace = { ...space("fixed"), ...spaceSize(200, true) };
+		const file: InkFile = { version: 2, contentWidth: 650, strokes: [stroke({ space: "fixed" })], spaces: [fixed, space("flexible")] };
+		const serialized = serializeInkFile(file);
+		expect(parseInkFile(serialized).spaces).toEqual(file.spaces);
+		const ad = new MemAdapter();
+		ad.files.set("Ink/n.md.json", serialized);
+		const store = new InkStore(ad, { root: "Ink" });
+		await store.load("n.md");
+		expect(store.editSpaces("n.md", { resize: [{ id: fixed.id, height: A4_SPACE_HEIGHT + 100 }] })).toBe(false);
+		expect(store.get("n.md")?.spaces).toEqual(file.spaces);
+	});
 	const rects = [
 		{ id: "A", top: 100, height: 200 },
 		{ id: "B", top: 400, height: 100 },

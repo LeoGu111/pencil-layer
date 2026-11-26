@@ -579,6 +579,24 @@
 }
 
 /* Lasso loop and selection box (GoodNotes: dashed, accent colored). */
+.pencil-layer-overlay .pl-set-square {
+	fill: var(--interactive-accent);
+	fill-opacity: 0.14;
+	stroke: var(--interactive-accent);
+	stroke-width: 1.5px;
+}
+
+.pencil-layer-overlay .pl-set-square-grip {
+	fill: var(--interactive-accent);
+	cursor: grab;
+	pointer-events: all;
+	touch-action: none;
+}
+
+.pencil-layer-overlay .pl-set-square-grip:active {
+	cursor: grabbing;
+}
+
 .pencil-layer-overlay .pl-lasso-path,
 .pencil-layer-overlay .pl-sel-box {
 	fill: none;

@@ -150,6 +150,8 @@ export interface InkSpace {
 	after: Anchor | "end";
 	/** Height in px (editor px; the same in Reading view and the PDF). */
 	height: number;
+	/** A fixed page created in A4 mode. */
+	a4?: true;
 	/** TRANSIENT, never serialized: live start position of the `after` line (like `Stroke.pos`). */
 	pos?: number;
 }
@@ -427,9 +429,10 @@ export function parseSpace(raw: unknown): InkSpace | null {
 	const r = raw as Record<string, unknown>;
 	if (typeof r.id !== "string" || !r.id || !isNum(r.height)) return null;
 	const height = Math.min(SPACE_MAX_HEIGHT, Math.max(SPACE_MIN_HEIGHT, Math.ceil(r.height)));
-	if (r.after === "end") return { id: r.id, after: "end", height };
+	const a4 = r.a4 === true ? { a4: true as const } : {};
+	if (r.after === "end") return { id: r.id, after: "end", height, ...a4 };
 	const after = parseAnchor(r.after);
-	return after ? { id: r.id, after, height } : null;
+	return after ? { id: r.id, after, height, ...a4 } : null;
 }
 
 /** A Stage J page entry (legacy: converted to a space on load), or null. */
@@ -551,7 +554,7 @@ export interface DiskInkFile {
 	contentWidth: number;
 	strokes: DiskStroke[];
 	/** Stage K, only written when non-empty. */
-	spaces?: { id: string; after: Anchor | "end"; height: number }[];
+	spaces?: Pick<InkSpace, "id" | "after" | "height" | "a4">[];
 }
 
 /**
@@ -583,6 +586,7 @@ export function serializeInkFile(ink: InkFile): string {
 			id: p.id,
 			after: p.after === "end" ? "end" : { line: p.after.line, hash: p.after.hash },
 			height: Math.ceil(p.height),
+			...(p.a4 ? { a4: true as const } : {}),
 		}));
 	}
 	return JSON.stringify(out);
@@ -677,6 +681,12 @@ export function mergeSpaces(base: readonly InkSpace[], local: readonly InkSpace[
 		const l = localById.get(s.id);
 		const r = remoteById.get(s.id);
 		if (!l || !r) continue;
+		const fixed = l.a4 ? l : r.a4 ? r : null;
+		if (fixed) {
+			s.a4 = true;
+			s.height = fixed.height;
+			continue;
+		}
 		const h = mergedHeight(baseById.get(s.id)?.height, l.height, r.height);
 		s.height = h;
 	}
@@ -709,7 +719,7 @@ export function fitSpacesToInk(ink: InkFile): void {
 	const bottom = spaceInkBottoms(ink.strokes);
 	for (const sp of ink.spaces) {
 		const b = bottom.get(sp.id);
-		if (b !== undefined) sp.height = Math.max(sp.height, spaceMinHeight(b));
+		if (!sp.a4 && b !== undefined) sp.height = Math.max(sp.height, spaceMinHeight(b));
 	}
 }
 

@@ -449,7 +449,7 @@ export class InkStore {
 		const resized: Resize[] = [];
 		for (const r of edit.resize ?? []) {
 			const space = spaces.find((sp) => sp.id === r.id);
-			if (!space || !Number.isFinite(r.height) || space.height === r.height) continue;
+			if (!space || space.a4 || !Number.isFinite(r.height) || space.height === r.height) continue;
 			resized.push({ space, from: space.height, to: r.height });
 			space.height = r.height;
 		}

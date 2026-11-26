@@ -48,6 +48,7 @@ import {
 	toFloatPos,
 } from "./floating";
 import { GRIP_LONG_PRESS_MS, GripPress } from "./grip";
+import type { DrawShape } from "./shapes";
 import {
 	ActiveTool,
 	HIGHLIGHTER_COLORS,
@@ -803,8 +804,21 @@ export class InkToolbar {
 				this.toggle(el, "Double-tap with the Pencil tip", s.doubleTapEraser, () => set({ doubleTapEraser: !s.doubleTapEraser }));
 				this.toggle(el, "Scribbling over ink", s.scribbleErase, () => set({ scribbleErase: !s.scribbleErase }));
 				break;
-			case "pen":
+			case "pen": {
 				this.title(el, "Pen");
+				this.subtitle(el, "Draw shape");
+				const shapes: [DrawShape, string][] = [["freehand", "Freehand"], ["line", "Line"], ["arrow", "Arrow"], ["rectangle", "Rectangle"], ["ellipse", "Ellipse"], ["triangle", "Triangle"]];
+				for (const row of [shapes.slice(0, 3), shapes.slice(3)]) {
+					this.segmented(el, row.map(([shape, label]) => ({ label, active: s.penShape === shape, run: () => set({ penShape: shape }) })));
+				}
+				this.toggle(el, "Set square", s.setSquare, () => set({ setSquare: !s.setSquare }));
+				if (s.setSquare) {
+					this.segmented(el, [
+						{ label: "−15°", active: false, run: () => set({ setSquareAngle: (s.setSquareAngle + 345) % 360 }) },
+						{ label: `${s.setSquareAngle}°`, active: true, run: () => set({ setSquareAngle: 0 }) },
+						{ label: "+15°", active: false, run: () => set({ setSquareAngle: (s.setSquareAngle + 15) % 360 }) },
+					], "Rotate set square");
+				}
 				this.segmented(
 					el,
 					[
@@ -831,6 +845,7 @@ export class InkToolbar {
 					);
 				}
 				break;
+			}
 			case "highlighter":
 				this.title(el, "Highlighter");
 				this.toggle(el, "Snap to text", s.highlighterSnapText, () => set({ highlighterSnapText: !s.highlighterSnapText }));

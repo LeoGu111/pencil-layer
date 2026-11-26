@@ -49,6 +49,7 @@ import {
 	ownedRange,
 	printAreaHeight,
 	printAreaWidth,
+	PRINT_PAGE_CLEARANCE,
 	rangePieces,
 	reserveSpace,
 	sectionKind,
@@ -1089,7 +1090,7 @@ export class ReadingInk {
 		const lines = splitLines(text);
 		const { hosts } = this.printBlocks(container, file);
 		// [Stage K] a space up to one printable page tall (layout px) never breaks across pages.
-		const pageHeight = printAreaHeight(cfg) - 2;
+		const pageHeight = printAreaHeight(cfg) - PRINT_PAGE_CLEARANCE;
 		// Document style: its body text has its own line height; ink was drawn against the editor's.
 		const yScale = style === "document" ? inkYScale(lineHeightOf(container), this.editorLineHeight(file.path)) : 1;
 		this.drawHosts(container, lines, hosts, ink, pageHeight, yScale);

@@ -1,8 +1,8 @@
-# Pencil Layer
+# Ink Pages
 
 Handwrite, sketch, and highlight right on top of your Markdown notes with a stylus. The pen draws, your finger scrolls, and the keyboard keeps typing. There is no mode to switch.
 
-Pencil Layer adds a transparent ink layer over the editor (Live Preview and Source mode). Ink is attached to the lines of your note, so it moves with the text when you type above it. It shows up in Reading view and in PDF exports, and it is saved in small JSON files next to your notes. Your Markdown is never modified by ink.
+Ink Pages is a standalone Obsidian plugin based on [Pencil Layer](https://github.com/standw7/pencil-layer), with drawing tools inspired by [Notify](https://github.com/LeoGu111/Notify). Its ink follows the lines of your note, appears in Reading view and PDF exports, and is saved in JSON files inside your vault.
 
 
 - [Features](#features)
@@ -42,6 +42,7 @@ Pencil Layer adds a transparent ink layer over the editor (Live Preview and Sour
 - **Eraser.** Erases whole strokes, or only the part you touch (precise mode, three sizes). It can be limited to the highlighter. A pen's eraser end (Surface Pen, many Wacom pens) erases while you hold it.
 - **Lasso.** Select ink, then move, resize, copy, cut, paste, duplicate, delete, recolor or screenshot it, or turn it into a drawing space.
 - **Shapes.** Draw and hold to snap a stroke to a line, arrow, rectangle, triangle, polygon, ellipse or circle, right angle, polyline, arc, parabola or smooth curve. Keep the pen down to adjust it.
+- **Geometry tools.** Tap the selected pen to open its menu. Choose a shape and drag to size it, or turn on the set square and start a line close to an edge. Drag the round grip to move it and use the angle controls to rotate it.
 - **Scribble to erase** and **double-tap to toggle the eraser** (both optional).
 - **Drawing spaces.** Protected blank areas between paragraphs for diagrams. They grow as you draw near the bottom, can be resized, and move with their paragraph. Drawing below the end of a note creates one automatically.
 - **Reading view and PDF export.** Ink renders in Reading view and in Obsidian's "Export to PDF". You can export with or without ink, and tall drawings are split cleanly across pages on white paper.
@@ -53,7 +54,7 @@ Pencil Layer adds a transparent ink layer over the editor (Live Preview and Sour
 
 ## Installation
 
-Pencil Layer is installed like any other community plugin. The steps are the same on iPad, iPhone, Android, Mac, Windows and Linux. It needs Obsidian 1.8.7 or newer.
+Ink Pages needs Obsidian 1.8.7 or newer. It has its own plugin ID, `ink-pages`. If you already use Pencil Layer, disable it before enabling Ink Pages. Ink Pages imports the previous settings on first launch when they are present and reads the ink files from the configured vault folder.
 
 ### Step 0: turn on community plugins (first time only)
 
@@ -61,33 +62,24 @@ Pencil Layer is installed like any other community plugin. The steps are the sam
 2. Go to **Community plugins**.
 3. If you see **Restricted mode is on**, tap **Turn on community plugins**.
 
-### Option A: from Community plugins (once Pencil Layer is listed)
-
-1. **Settings → Community plugins → Browse**.
-2. Search for **Pencil Layer** and tap it.
-3. Tap **Install**, then **Enable**.
-
-Updates appear under **Settings → Community plugins → Check for updates**.
-
-### Option B: with BRAT (works right now, recommended until it's listed)
+### Option A: with BRAT
 
 [BRAT](https://github.com/TfTHacker/obsidian42-brat) installs plugins straight from GitHub and keeps them updated.
 
 1. **Settings → Community plugins → Browse**, search for **BRAT**, then **Install** and **Enable**.
 2. Go to **Settings → BRAT** (under "Community plugins" in the settings sidebar) and tap **Add beta plugin**.
-3. Paste `standw7/pencil-layer` as the repository, keep "latest version", and tap **Add plugin**.
-4. Go back to **Settings → Community plugins** and make sure **Pencil Layer** is switched on.
+3. Paste `LeoGu111/pencil-layer` as the repository, keep "latest version", and tap **Add plugin**. If BRAT already tracks this repo from a build named Pencil Layer, remove its tracking entry and add it again.
+4. Go back to **Settings → Community plugins** and switch on **Ink Pages**.
 
 BRAT checks for new versions when Obsidian starts, so you get updates automatically.
 
-### Option C: manual install (desktop)
+### Option B: manual install (desktop)
 
-1. Download `main.js`, `manifest.json` and `styles.css` from the latest [release](https://github.com/standw7/pencil-layer/releases/latest).
-2. In your vault folder, open the hidden `.obsidian/plugins/` folder and create a folder named `pencil-layer` inside it (on macOS press Cmd+Shift+. in Finder to show hidden folders; on Windows enable "Hidden items" in File Explorer's View menu).
-3. Put the three files in `<your vault>/.obsidian/plugins/pencil-layer/`.
-4. Restart Obsidian, then enable **Pencil Layer** under **Settings → Community plugins**.
+1. Download `main.js`, `manifest.json` and `styles.css` from the newest [Ink Pages release](https://github.com/LeoGu111/pencil-layer/releases).
+2. Put the three files in `<your vault>/.obsidian/plugins/ink-pages/`.
+3. Restart Obsidian, then enable **Ink Pages** under **Settings → Community plugins**.
 
-Manual installs don't update themselves; repeat these steps for each new release. On iPad/iPhone, use Option A or B instead, since the hidden plugin folder is hard to reach in the Files app.
+Manual installs require the same steps for each release. On iPad or iPhone, use BRAT to install and update the plugin.
 
 ### Using it on several devices
 
@@ -157,7 +149,7 @@ With a selection:
 - **Drag inside it** (pen, finger or mouse) to move it. **Drag the handle** at the bottom right to resize it, including stroke widths.
 - **Tap it** to show or hide the menu. Tap outside, or switch tools, to deselect.
 - **Menu:**
-  - **Copy** and **Cut** put the ink on Pencil Layer's clipboard. A PNG also goes to the system clipboard when possible.
+  - **Copy** and **Cut** put the ink on the plugin's clipboard. A PNG also goes to the system clipboard when possible.
   - **Duplicate** and **Delete**
   - **Color ▸** recolors the selection.
   - **Screenshot** opens the [screenshot](#screenshots) dialog.
@@ -194,6 +186,7 @@ A drawing space is a protected blank area after a paragraph, made for diagrams. 
   - **Clear ink**
   - **Delete space** (asks first if it has ink; undo brings it back)
 - **Make drawing space** (lasso menu) converts an existing loose drawing into a space without moving it.
+- **A4 drawing spaces** is an optional setting. New spaces have the printable height of a portrait A4 page at 100% with default margins. To print them at that size, select **A4**, **Portrait**, and **100%** in Obsidian's PDF export. Existing spaces and drawings keep their dimensions when you change the setting.
 - Blank lines directly below a space belong to it: drawing there grows the space.
 - **Typing below a drawing at the end of the note:** tap or click below it, or press ↓ on the last line, and a new line opens under the drawing.
 - **Moving drawings with text:** select text that includes a drawing space and cut and paste it. The drawing moves with the text, like an inline image, and editor undo undoes both together.
@@ -300,7 +293,7 @@ The current tool, pen preset, colors and highlighter width are remembered too (s
 
 - Each note with ink has one **sidecar file**: `<ink folder>/<path of the note>.json`. For example, `Courses/Physics/Week 3.md` → `Attachments/Ink/Courses/Physics/Week 3.md.json`. Your Markdown files are never changed by ink. The one exception is that **Make drawing space** may remove blank lines it replaces, as one editor undo step.
 - Renaming or moving a note moves its ink file. Deleting a note deletes its ink file, and deleting a folder moves its ink folder to the trash.
-- **Changing the ink folder:** enter a new folder under **Settings → Pencil Layer → Files → Ink folder** and press **Change**. You can **move the existing ink files** there (recommended), or switch without moving, in which case old ink stays in the old folder and isn't shown. Pick a visible folder (not starting with `.`), because hidden folders are not indexed or synced.
+- **Changing the ink folder:** enter a new folder under **Settings → Ink Pages → Files → Ink folder** and press **Change**. You can **move the existing ink files** there (recommended), or switch without moving, in which case old ink stays in the old folder and isn't shown. Pick a visible folder (not starting with `.`), because hidden folders are not indexed or synced.
 - **Sync:** ink files are ordinary vault files, so any sync (Obsidian Sync, iCloud, Dropbox, Syncthing, git…) carries them. With **Obsidian Sync**, enable **Sync → "All other file types"** so the `.json` files are included. When another device's ink arrives while a note is open, it is merged in live. Strokes are merged one by one, so drawing on two devices at once doesn't lose either side's ink.
 - The ink folder setting is synced. If you change it, let sync finish on every device before drawing there.
 - Undo history is per note and per session (not saved).
@@ -357,14 +350,14 @@ Check **Include ink in PDF export** (per device), or use **⋯ → Export PDF wi
 Use **Undo** on the toolbar (ink undo is separate from text undo).
 
 **Can I move my ink to another folder?**
-Yes. Use **Settings → Pencil Layer → Files → Ink folder → Change → Move ink and switch**.
+Yes. Use **Settings → Ink Pages → Files → Ink folder → Change → Move ink and switch**.
 
 **Does it work with Canvas or PDFs?**
 No. It works on Markdown notes in the editor, with read-only display in Reading view and PDF export.
 
 ## For plugin developers
 
-Pencil Layer exposes a small API at `app.plugins.plugins["pencil-layer"].api` (type `PencilLayerApi`, see `src/api.ts`). It can list the lines of a note that carry ink, copy ink to a reorganized copy of a note, and render a note's drawings to PNG images.
+Ink Pages exposes a small API at `app.plugins.plugins["ink-pages"].api` (type `PencilLayerApi`, see `src/api.ts`). It can list the lines of a note that carry ink, copy ink to a reorganized copy of a note, and render a note's drawings to PNG images.
 
 ## Development
 

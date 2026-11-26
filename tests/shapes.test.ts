@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { SNAP_HOLD_MS, ShapeSpec, adjustShape, arrowBarbs, findCorners, recognizeShape, resample, shapeToPoints } from "../src/shapes";
+import { SNAP_HOLD_MS, ShapeSpec, adjustShape, arrowBarbs, draggedShape, findCorners, recognizeShape, resample, shapeToPoints } from "../src/shapes";
+import { nearestGuideEdge, projectToEdge, setSquareEdges } from "../src/geometryGuide";
 import { XY, along, curve, cursive, handArrow, handCurve, handPolyline, handStroke, letterM, letterW, noisy, rotateAll } from "./handdrawn";
 
 const close = (a: number, b: number, tol: number) => expect(Math.abs(a - b)).toBeLessThanOrEqual(tol);
@@ -7,6 +8,22 @@ const closePt = (p: readonly number[], q: readonly number[], tol: number) => {
 	close(p[0], q[0], tol);
 	close(p[1], q[1], tol);
 };
+
+describe("geometry tools", () => {
+	it("sizes selected shapes by dragging in either direction", () => {
+		expect(draggedShape("rectangle", [80, 100], [20, 40])).toEqual({ kind: "rectangle", vertices: [[80, 100], [20, 100], [20, 40], [80, 40]] });
+		expect(draggedShape("ellipse", [80, 100], [20, 60])).toEqual({ kind: "ellipse", cx: 50, cy: 80, rx: 30, ry: 20, rot: 0 });
+		expect(draggedShape("triangle", [80, 100], [20, 40])).toEqual({ kind: "triangle", vertices: [[50, 100], [20, 40], [80, 40]] });
+	});
+
+	it("snaps to one finite edge of a rotated set square", () => {
+		const edges = setSquareEdges([100, 100], 90, 50);
+		const edge = nearestGuideEdge([104, 90], edges, 14);
+		expect(edge).toEqual(edges[0]);
+		closePt(projectToEdge([70, 200], edge!), [100, 150], 1e-6);
+		expect(nearestGuideEdge([170, 90], edges, 14)).toBeNull();
+	});
+});
 
 function rectPath(x: number, y: number, w: number, h: number, startFrac = 0): XY[] {
 	const v: XY[] = [

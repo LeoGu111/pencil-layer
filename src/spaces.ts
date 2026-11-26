@@ -26,7 +26,20 @@
  * GoodNotes extending its canvas), live while drawing. The resize handle sets any height, but never
  * less than `spaceMinHeight` of its ink. A space never shrinks on its own.
  */
-import { InkSpace, LineSource, SPACE_MIN_HEIGHT, resolveAnchor, spaceMinHeight } from "./model";
+import { InkSpace, LineSource, SPACE_INK_PAD, SPACE_MIN_HEIGHT, resolveAnchor, spaceMinHeight } from "./model";
+import { PRINT_PAGE_CLEARANCE, printAreaHeight } from "./readingMap";
+
+/** Printable height of one portrait A4 page at 100% with default margins, in editor pixels. */
+export const A4_SPACE_HEIGHT = Math.floor(printAreaHeight({ pageSize: "A4" }) - PRINT_PAGE_CLEARANCE);
+
+export function spaceSize(height: number, a4: boolean): Pick<InkSpace, "height" | "a4"> {
+	return a4 ? { height: A4_SPACE_HEIGHT, a4: true } : { height };
+}
+
+/** Keep the stroke outline and bottom padding inside a fixed page. */
+export function boundSpaceY(y: number, height: number, radius: number): number {
+	return Math.max(radius, Math.min(height - SPACE_INK_PAD - radius, y));
+}
 
 /** Drawing closer than this to a space's bottom edge (px) grows it. */
 export const GROW_ZONE = 40;
@@ -218,10 +231,14 @@ export function defaultSpaceHeight(visible: number): number {
  * it then needs, or a new "end" space starting at `docBottom`. `inkTop`/`inkBottom` are document y.
  */
 export function endSpacePlan(
-	last: { id: string; top: number; height: number; end: boolean } | null,
+	last: { id: string; top: number; height: number; end: boolean; a4?: true } | null,
 	docBottom: number,
 	inkBottom: number,
+	a4 = false,
 ): { extend: string | null; top: number; height: number } {
+	const top = last ? last.top + last.height : docBottom;
+	if (a4) return { extend: null, top, height: A4_SPACE_HEIGHT };
+	if (last?.a4) return { extend: null, top, height: grownHeight(SPACE_MIN_HEIGHT, inkBottom - top) };
 	if (last && last.end) return { extend: last.id, top: last.top, height: grownHeight(last.height, inkBottom - last.top) };
 	return { extend: null, top: docBottom, height: grownHeight(SPACE_MIN_HEIGHT, inkBottom - docBottom) };
 }

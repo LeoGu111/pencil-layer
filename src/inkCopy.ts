@@ -179,7 +179,7 @@ export function copyInkData(
 		} else {
 			after = anchorAt(m);
 		}
-		spaces.push({ id, after, height: sp.height });
+		spaces.push({ id, after, height: sp.height, ...(sp.a4 ? { a4: true } : {}) });
 		spaceMap.set(sp.id, { id, line: after === "end" ? last : m!, unplaced: m === null });
 	}
 

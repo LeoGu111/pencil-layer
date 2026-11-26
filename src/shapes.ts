@@ -74,6 +74,24 @@ export type ShapeSpec =
 	/** Smooth curve as one cubic Bézier: start `a`, controls `c1`, `c2`, end `b`. */
 	| { kind: "curve"; a: XY; c1: XY; c2: XY; b: XY };
 
+export const DRAW_SHAPES = ["freehand", "line", "arrow", "rectangle", "ellipse", "triangle"] as const;
+export type DrawShape = (typeof DRAW_SHAPES)[number];
+
+/** Explicit shapes are sized by dragging from one corner to another. */
+export function draggedShape(kind: Exclude<DrawShape, "freehand">, a: XY, b: XY): ShapeSpec {
+	const [x0, y0] = a;
+	const [x1, y1] = b;
+	const cx = (x0 + x1) / 2;
+	const cy = (y0 + y1) / 2;
+	switch (kind) {
+		case "line": return { kind, a, b };
+		case "arrow": return { kind, a, b, head: Math.min(16, Math.hypot(x1 - x0, y1 - y0) / 3) };
+		case "rectangle": return { kind, vertices: [a, [x1, y0], b, [x0, y1]] };
+		case "ellipse": return { kind, cx, cy, rx: Math.abs(x1 - x0) / 2, ry: Math.abs(y1 - y0) / 2, rot: 0 };
+		case "triangle": return { kind, vertices: [[cx, y0], [x1, y1], [x0, y1]] };
+	}
+}
+
 /** Tuning constants (exported so they can be adjusted in one place and covered by tests). */
 export const SHAPE_TUNING = {
 	/** Minimum bbox diagonal of a stroke to be considered (px). Smaller = handwriting/dots. */

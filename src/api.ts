@@ -1,5 +1,5 @@
 /**
- * Public API for other plugins: `app.plugins.plugins["pencil-layer"].api` (see DESIGN.md
+ * Public API for other plugins: `app.plugins.plugins["ink-pages"].api` (see DESIGN.md
  * "Public API (for other plugins)"). Thin Obsidian glue; the remapping logic is in inkCopy.ts.
  */
 import type { EditorView } from "@codemirror/view";

@@ -11,7 +11,7 @@
  */
 import type { PenStyle, Tool } from "./model";
 import { SMOOTHING_LEVELS, SmoothingLevel } from "./smoothing";
-import { SNAP_HOLD_MS } from "./shapes";
+import { DRAW_SHAPES, DrawShape, SNAP_HOLD_MS } from "./shapes";
 import { DOC_FONTS, DocFont, EXPORT_STYLES, ExportStyle } from "./docStyle";
 
 export type ActiveTool = Tool | "eraser" | "lasso";
@@ -46,6 +46,8 @@ export interface SyncedSettings {
 	/** On-screen widths in px of the three pen presets. */
 	penWidths: PenWidths;
 	inkVisible: boolean;
+	/** New drawing spaces have the fixed printable height of portrait A4. */
+	a4DrawingSpaces: boolean;
 	/** Draw and hold to snap to a shape (pen only). */
 	shapeSnap: boolean;
 	/** How long the pen must stay still before snapping (ms). */
@@ -105,6 +107,9 @@ export interface LocalSettings {
 	 * shown even when the mouse doesn't draw. Set automatically the first time a pen touches a note.
 	 */
 	penDevice: boolean;
+	penShape: DrawShape;
+	setSquare: boolean;
+	setSquareAngle: number;
 	/**
 	 * Per-device settings schema version. 2 (Stage F): the desktop toolbar (now the slim Select
 	 * variant) is shown by default — see `sanitizeLocal`.
@@ -121,6 +126,9 @@ export const LOCAL_KEYS: readonly (keyof LocalSettings)[] = [
 	"toolbarPos",
 	"toolbarCollapsed",
 	"toolbarEdge",
+	"penShape",
+	"setSquare",
+	"setSquareAngle",
 	"eraserMode",
 	"eraserSize",
 	"eraseHighlighterOnly",
@@ -208,6 +216,7 @@ export const DEFAULT_SYNCED: Readonly<SyncedSettings> = {
 	penFeel: "ball",
 	penWidths: DEFAULT_PEN_WIDTHS,
 	inkVisible: true,
+	a4DrawingSpaces: false,
 	shapeSnap: true,
 	shapeHoldMs: DEFAULT_HOLD_MS,
 	doubleTapEraser: false,
@@ -235,6 +244,9 @@ export function defaultLocal(_isMobile: boolean): LocalSettings {
 		toolbarPos: null,
 		toolbarCollapsed: false,
 		toolbarEdge: "bottom",
+		penShape: "freehand",
+		setSquare: false,
+		setSquareAngle: 0,
 		eraserMode: "stroke",
 		eraserSize: "m",
 		eraseHighlighterOnly: false,
@@ -320,6 +332,7 @@ export function sanitizeSynced(raw: unknown): SyncedSettings {
 			thick: sanitizeWidth(w.thick, DEFAULT_PEN_WIDTHS.thick),
 		},
 		inkVisible: typeof r.inkVisible === "boolean" ? r.inkVisible : DEFAULT_SYNCED.inkVisible,
+		a4DrawingSpaces: bool(r.a4DrawingSpaces, DEFAULT_SYNCED.a4DrawingSpaces),
 		shapeSnap: typeof r.shapeSnap === "boolean" ? r.shapeSnap : DEFAULT_SYNCED.shapeSnap,
 		shapeHoldMs: legacy && r.shapeHoldMs === 450 ? DEFAULT_HOLD_MS : sanitizeHoldMs(r.shapeHoldMs),
 		doubleTapEraser: legacy ? false : bool(r.doubleTapEraser, DEFAULT_SYNCED.doubleTapEraser),
@@ -371,6 +384,10 @@ export function sanitizeLocal(raw: unknown, isMobile: boolean): LocalSettings {
 		toolbarPos: sanitizeToolbarPos(r.toolbarPos),
 		toolbarCollapsed: bool(r.toolbarCollapsed, d.toolbarCollapsed),
 		toolbarEdge: oneOf(EDGES, r.toolbarEdge, d.toolbarEdge),
+		penShape: oneOf(DRAW_SHAPES, r.penShape, d.penShape),
+		setSquare: bool(r.setSquare, d.setSquare),
+		setSquareAngle: typeof r.setSquareAngle === "number" && Number.isFinite(r.setSquareAngle)
+			? ((Math.round(r.setSquareAngle) % 360) + 360) % 360 : d.setSquareAngle,
 		eraserMode: oneOf(ERASER_MODES, r.eraserMode, d.eraserMode),
 		eraserSize: oneOf(ERASER_SIZES, r.eraserSize, d.eraserSize),
 		eraseHighlighterOnly: bool(r.eraseHighlighterOnly, d.eraseHighlighterOnly),

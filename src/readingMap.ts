@@ -291,6 +291,9 @@ export function printAreaHeight(cfg: unknown): number {
 	return (p.height - 2 * p.margin) / p.downscale;
 }
 
+/** Clearance for layout rounding at the bottom of a printed page. */
+export const PRINT_PAGE_CLEARANCE = 2;
+
 /** [Stage I] The exported page: full size and margin (CSS px at 96 dpi), downscale factor, file-name title. */
 export interface PageSpec {
 	width: number;

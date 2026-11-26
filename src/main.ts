@@ -43,11 +43,12 @@ import {
 /** data.json keys from M1 that no longer belong there. */
 const LEGACY_KEYS = ["toolbarVisible", "mouseDraws", "penSize", "highlighterSize"];
 /** Per-device settings key (Obsidian scopes local storage per vault). */
-const LOCAL_KEY = "pencil-layer:device";
+const LOCAL_KEY = "ink-pages:device";
+const PREVIOUS_LOCAL_KEY = "pencil-layer:device";
 
 export default class PencilLayerPlugin extends Plugin implements InkHost, ToolbarHost {
 	store!: InkStore;
-	/** Public API for other plugins: `app.plugins.plugins["pencil-layer"].api` (see api.ts). */
+	/** Public API for other plugins: `app.plugins.plugins["ink-pages"].api` (see api.ts). */
 	readonly api: PencilLayerApi = createApi(this.app, () => this.store);
 	settings: PencilSettings = { ...sanitizeSynced(null), ...sanitizeLocal(null, Platform.isMobile) };
 	readonly showMouseToggle = !Platform.isMobile;
@@ -70,18 +71,20 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 	private readonly renaming = new Map<string, number>();
 
 	async onload(): Promise<void> {
-		const raw: unknown = await this.loadData();
+		const current: unknown = await this.loadData();
+		const raw: unknown = current ?? await this.loadPreviousSettings();
 		const rawLocal = this.loadLocal();
 		this.settings = { ...sanitizeSynced(raw), ...sanitizeLocal(rawLocal, Platform.isMobile) };
+		if (raw == null && Platform.isIosApp) this.settings.doubleTapEraser = true;
 		// [Stage F] pre-F device settings: the desktop toolbar (now the slim Select bar) is shown — persist once.
-		if (needsLocalMigration(rawLocal)) this.saveLocal();
+		if (current == null || needsLocalMigration(rawLocal)) this.saveLocal();
 		// M1 kept per-device and size keys in data.json (synced to every device): drop them once.
 		// Stage A's "dotted" preset is "dashed" since A2: rewrite once.
 		const r = raw as { penPreset?: unknown; penWidths?: Record<string, unknown> } | null;
 		const legacyDotted = !!r && typeof r === "object" && (r.penPreset === "dotted" || (!!r.penWidths && "dotted" in r.penWidths));
 		// Pre-Stage-E files are migrated once (double-tap off, 0.5 s hold delay): persist that.
 		const oldVersion = !!r && typeof r === "object" && (r as { settingsVersion?: unknown }).settingsVersion !== SETTINGS_VERSION;
-		if (raw && typeof raw === "object" && (legacyDotted || oldVersion || LEGACY_KEYS.some((k) => k in raw))) {
+		if (current == null || (raw && typeof raw === "object" && (legacyDotted || oldVersion || LEGACY_KEYS.some((k) => k in raw)))) {
 			await this.saveData(syncedOnly(this.settings));
 		}
 		// "Ink folder" setting (default Attachments/Ink): a visible folder, because Obsidian Sync skips hidden ones.
@@ -170,10 +173,21 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 
 	private loadLocal(): unknown {
 		try {
-			const v: unknown = this.app.loadLocalStorage(LOCAL_KEY);
+			const v: unknown = this.app.loadLocalStorage(LOCAL_KEY) ?? this.app.loadLocalStorage(PREVIOUS_LOCAL_KEY);
 			if (v !== null && v !== undefined) return typeof v === "string" ? JSON.parse(v) : v;
 		} catch {
 			/* fall through */
+		}
+		return null;
+	}
+
+	private async loadPreviousSettings(): Promise<unknown> {
+		const vault = this.app.vault;
+		const path = normalizePath(`${vault.configDir}/plugins/pencil-layer/data.json`);
+		try {
+			if (await vault.adapter.exists(path)) return JSON.parse(await vault.adapter.read(path)) as unknown;
+		} catch (err) {
+			console.warn("[ink-pages] could not read Pencil Layer settings", err);
 		}
 		return null;
 	}
@@ -621,6 +635,10 @@ class PencilSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Show ink")
 			.addToggle((t) => t.setValue(s.inkVisible).onChange((v) => this.plugin.updateSettings({ inkVisible: v })));
+		new Setting(containerEl)
+			.setName("A4 drawing spaces")
+			.setDesc("New spaces have the printable height of one portrait A4 page at 100% scale. Existing drawings keep their size.")
+			.addToggle((t) => t.setValue(s.a4DrawingSpaces).onChange((v) => this.plugin.updateSettings({ a4DrawingSpaces: v })));
 		// [Stage D]
 		new Setting(containerEl)
 			.setName("Include ink in PDF export (this device)")
@@ -720,8 +738,8 @@ class PencilSettingTab extends PluginSettingTab {
 				});
 			});
 		new Setting(containerEl)
-			.setName("Double-tap toggles eraser")
-			.setDesc("Off by default. Two very quick taps with the Pencil tip at the same spot switch between the current tool and the eraser (the taps leave no dots). Taps next to ink you wrote in the last 1.5 s never count, so dotting an i or a full stop doesn't switch. The \"Toggle eraser\" command does the same from a keyboard (assign it a hotkey under Settings → Hotkeys).")
+			.setName("Double-tap with the Pencil tip to switch tools")
+			.setDesc("Tap the screen twice with the Pencil tip to switch between the current tool and the eraser. The taps leave no dots. Taps beside recent handwriting do not switch tools.")
 			.addToggle((t) => t.setValue(s.doubleTapEraser).onChange((v) => this.plugin.updateSettings({ doubleTapEraser: v })));
 		new Setting(containerEl)
 			.setName("Scribble to erase")

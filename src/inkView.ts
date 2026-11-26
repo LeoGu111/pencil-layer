@@ -21,7 +21,7 @@ import { EditorView, PluginValue, ViewPlugin, ViewUpdate, keymap } from "@codemi
 import { Prec } from "@codemirror/state";
 import type { Extension, Text } from "@codemirror/state";
 import { Notice, Platform, editorInfoField, setIcon, setTooltip } from "obsidian";
-import { InkFile, InkSpace, PenStyle, Point, Stroke, Tool, hashLine, isEmptyInk, newId, resolveAnchor, spaceInkBottoms } from "./model";
+import { InkFile, InkSpace, PenStyle, Point, SPACE_INK_PAD, Stroke, Tool, hashLine, isEmptyInk, newId, resolveAnchor, spaceInkBottoms } from "./model";
 import { BBox, bbox, dashArray, hitTestStrokeSegment, isCenterline, isDashed, strokeToPath } from "./geometry";
 import {
 	CurveBuilder,
@@ -49,7 +49,8 @@ import { erasePieces } from "./erase";
 import { straightLine } from "./highlight";
 import { isPenEraser, toolForPress } from "./penInput";
 import { blockStylusTouch, onTap } from "./tap";
-import { ShapeSpec, XY, adjustShape, recognizeShape, shapeToPoints } from "./shapes";
+import { DrawShape, ShapeSpec, XY, adjustShape, draggedShape, recognizeShape, shapeToPoints } from "./shapes";
+import { GuideEdge, nearestGuideEdge, projectToEdge, setSquareEdges } from "./geometryGuide";
 import {
 	RecentInk,
 	ScribbleTarget,
@@ -85,7 +86,7 @@ import { CharAnchors } from "./charAnchorView"; // [Stage H]
 import { CLICK_MOVE, CLICK_TOLERANCE, DeskTarget, InkKeyAction, deskPress, deskRegionRelease, pickTopmost, rectPolygon, strokeNear } from "./select"; // [Stage F/H]
 import type { SelectMode } from "./settings"; // [Stage F]
 import { MovedSpace, SpaceActions, SpaceBox, SpaceControls, SpaceSpec, currentSpecs, expectSpaceMove, sameSpecs, setSpaces, spaceField, spaceLayout, spaceMove, spaceMoveHistory, spacesChanged } from "./spaceView"; // [Stage K]
-import { LaidLine, SPACE_CLIP_TEXT, SpaceRect, blockEnds, defaultSpaceHeight, endSpacePlan, enterOpensBelow, groupSpace, grownHeight, isSpaceClipText, blankRunAbove, blankRunBelow, openBelowInsert, planMakeSpace, resizedHeight, sameClipText, spaceAt, spaceInRange } from "./spaces"; // [Stage K]
+import { LaidLine, SPACE_CLIP_TEXT, SpaceRect, blockEnds, boundSpaceY, defaultSpaceHeight, endSpacePlan, enterOpensBelow, groupSpace, grownHeight, isSpaceClipText, blankRunAbove, blankRunBelow, openBelowInsert, planMakeSpace, resizedHeight, sameClipText, spaceAt, spaceInRange, spaceSize } from "./spaces"; // [Stage K]
 
 export type { ActiveTool } from "./settings";
 
@@ -132,6 +133,7 @@ export interface ClipSpace {
 	/** Line it follows, relative to the first line of the copied text (0 for a "⋯" Copy/Cut). */
 	rel: number;
 	height: number;
+	a4?: true;
 	strokes: (Pick<Stroke, "tool" | "color" | "size" | "style" | "shape"> & { points: Point[] })[];
 }
 
@@ -286,13 +288,14 @@ interface DrawInput extends TapTrack {
 	holdTried: boolean;
 	/** Snapped shape being adjusted while the pen stays down. */
 	snap: { spec0: ShapeSpec; spec: ShapeSpec; p0: XY; pen: XY | null } | null;
+	geometry: { shape: Exclude<DrawShape, "freehand">; start: XY; edge: GuideEdge | null; end: XY | null } | null;
 	/** Straight-line highlighter: the start point (points = start → pen). */
 	straight: XY | null;
 	lastScribbleCheck: number;
 	/** Scribble-to-erase state for this stroke: the preview shows, and lift erases, its ids. */
 	scribble: ScribbleTracker;
 	/** [Stage K] The drawing space the stroke started in (its top, document y), or null. */
-	space: { id: string; top: number } | null;
+	space: { id: string; top: number; fixedHeight?: number } | null;
 }
 
 interface EraseInput extends TapTrack {
@@ -429,6 +432,10 @@ export class InkView implements PluginValue {
 	private recentInk: RecentInk[] = [];
 	/** Eraser position while erasing. */
 	private readonly eraserCursor: SVGCircleElement;
+	private readonly guideOutline: SVGPathElement;
+	private readonly guideGrip: SVGCircleElement;
+	private guideOrigin: XY | null = null;
+	private guideDrag: { id: number; offset: XY } | null = null;
 
 	/** Lasso selection (strokes on the canvas) and the live drag transform. */
 	private selection: Stroke[] | null = null;
@@ -469,7 +476,16 @@ export class InkView implements PluginValue {
 		this.selHandle.classList.add("pl-hidden");
 		this.eraserCursor = svgEl("circle", "pl-eraser-cursor");
 		this.eraserCursor.classList.add("pl-hidden");
-		this.gUi.append(this.selRect, this.selHandle, this.eraserCursor);
+		this.guideOutline = svgEl("path", "pl-set-square pl-hidden");
+		this.guideGrip = svgEl("circle", "pl-set-square-grip pl-hidden");
+		this.guideGrip.setAttribute("r", "14");
+		this.guideGrip.setAttribute("aria-label", "Move set square");
+		this.guideGrip.addEventListener("pointerdown", this.onGuideDown);
+		this.guideGrip.addEventListener("pointermove", this.onGuideMove);
+		for (const event of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
+			this.guideGrip.addEventListener(event, this.onGuideEnd);
+		}
+		this.gUi.append(this.guideOutline, this.guideGrip, this.selRect, this.selHandle, this.eraserCursor);
 		this.svg.append(this.gHl, this.gHlLive, this.gPen, this.gPenLive, this.gUi);
 		view.scrollDOM.appendChild(this.svg);
 
@@ -888,6 +904,7 @@ export class InkView implements PluginValue {
 		const boxes = this.spaceRects();
 		let best: SpaceBox | null = null;
 		for (const b of boxes) {
+			if (this.spaceById(b.id)?.a4) continue;
 			const bottom = b.top + b.height;
 			if (y < bottom || (best && bottom <= best.top + best.height)) continue;
 			const run = blankRunBelow(this.blankLine, doc.lines, this.boxLine(b));
@@ -910,6 +927,7 @@ export class InkView implements PluginValue {
 		let S: AbsorbTarget["S"];
 		let line: number;
 		if (rect) {
+			if (this.spaceById(rect.id)?.a4 || extra.addSpaces?.some(({ space }) => space.id === rect.id && space.a4)) return null;
 			if (extra.addSpaces?.some((x) => x.space.id === rect.id)) {
 				S = { id: null, top: rect.top, height: rect.height };
 				line = doc.lines - 1;
@@ -923,7 +941,7 @@ export class InkView implements PluginValue {
 		} else {
 			// The first space below where the stroke started, if the stroke reaches into it.
 			const b = this.spaceRects().filter((r) => r.top > a.downY).sort((p, q) => p.top - q.top)[0];
-			if (!b || box.maxY < b.top + CROSS_INTO) return null;
+			if (!b || this.spaceById(b.id)?.a4 || box.maxY < b.top + CROSS_INTO) return null;
 			S = { id: b.id, top: b.top, height: this.spaceById(b.id)?.height ?? b.height };
 			line = this.boxLine(b);
 		}
@@ -1005,16 +1023,17 @@ export class InkView implements PluginValue {
 	}
 
 	private readonly spaceActions: SpaceActions = {
+		canResize: (id) => !this.spaceById(id)?.a4,
 		resizeLive: (id, height) => {
 			const sp = this.spaceById(id);
-			if (!sp) return;
+			if (!sp || sp.a4) return;
 			this.liveHeights.set(id, resizedHeight(height, this.spaceInkBottom(id)));
 			this.syncSpaces();
 		},
 		resizeEnd: (id, height) => {
 			this.liveHeights.delete(id);
 			const sp = this.spaceById(id);
-			if (this.path && sp && height !== null) {
+			if (this.path && sp && !sp.a4 && height !== null) {
 				const h = resizedHeight(height, this.spaceInkBottom(id));
 				if (h !== sp.height) this.store.editSpaces(this.path, { resize: [{ id, height: h }] });
 			}
@@ -1047,6 +1066,7 @@ export class InkView implements PluginValue {
 		return {
 			rel,
 			height: this.liveHeights.get(id) ?? sp.height,
+			...(sp.a4 ? { a4: true as const } : {}),
 			strokes: ink.strokes
 				.filter((s) => s.space === id)
 				.map((s) => ({ tool: s.tool, color: s.color, size: s.size, style: s.style, shape: s.shape, points: s.points.map((p): Point => [p[0], p[1], p[2]]) })),
@@ -1078,7 +1098,7 @@ export class InkView implements PluginValue {
 		for (const c of clip.spaces) {
 			const line = doc.line(Math.min(Math.max(1, first + c.rel), doc.lines));
 			const after = { line: line.number - 1, hash: hashLine(line.text) };
-			const space: InkSpace = { id: newId(), after, height: c.height, pos: line.from };
+			const space: InkSpace = { id: newId(), after, height: c.height, ...(c.a4 ? { a4: true } : {}), pos: line.from };
 			addSpaces.push({ space });
 			for (const st of c.strokes) {
 				addStrokes.push({
@@ -1124,7 +1144,7 @@ export class InkView implements PluginValue {
 			const line = st.doc.lineAt(sp.after === "end" || sp.pos === undefined ? st.doc.length : clampPos(st.doc, sp.pos));
 			const after = { line: line.number - 1, hash: hashLine(line.text) };
 			moved.push({
-				space: { id: sp.id, after, height: sp.height },
+				space: { id: sp.id, after, height: sp.height, ...(sp.a4 ? { a4: true } : {}) },
 				strokes: ink.strokes.filter((x) => x.space === sp.id).map((x) => ({ ...x, anchor: { ...after }, pos: undefined })),
 			});
 		}
@@ -1151,7 +1171,7 @@ export class InkView implements PluginValue {
 					if (have.has(a.space.id)) continue;
 					const line = doc.line(Math.min(Math.max(1, a.space.after.line + 1), doc.lines));
 					const after = { line: line.number - 1, hash: hashLine(line.text) };
-					edit.addSpaces!.push({ space: { id: a.space.id, after, height: a.space.height, pos: line.from } });
+					edit.addSpaces!.push({ space: { ...a.space, after, pos: line.from } });
 					for (const st of a.strokes) edit.addStrokes = [...edit.addStrokes!, { ...st, anchor: { ...after }, pos: line.from }];
 				}
 			}
@@ -1188,7 +1208,7 @@ export class InkView implements PluginValue {
 				const after = { line: ln - 1, hash: hashLine(text) };
 				const id = newId();
 				return {
-					space: { id, after, height: c.height },
+					space: { id, after, height: c.height, ...(c.a4 ? { a4: true } : {}) },
 					strokes: c.strokes.map((x) => ({
 						id: newId(),
 						tool: x.tool,
@@ -1231,7 +1251,7 @@ export class InkView implements PluginValue {
 				const ids = new Set(ends.map((sp) => sp.id));
 				this.store.editSpaces(this.path, {
 					removeSpaceIds: [...ids],
-					addSpaces: ends.map((sp) => ({ space: { id: sp.id, after: { ...after }, height: sp.height, pos: line.from }, index: ink.spaces!.indexOf(sp) })),
+					addSpaces: ends.map((sp) => ({ space: { ...sp, after: { ...after }, pos: line.from }, index: ink.spaces!.indexOf(sp) })),
 					addStrokes: ink.strokes.filter((s) => s.space !== undefined && ids.has(s.space)).map((s) => ({ ...s, anchor: { ...after }, pos: line.from })),
 				});
 			}
@@ -1272,8 +1292,8 @@ export class InkView implements PluginValue {
 		if (!path || !this.store.isLoaded(path)) return;
 		const doc = this.view.state.doc;
 		const line = doc.lineAt(this.view.state.selection.main.head);
-		const height = defaultSpaceHeight(this.view.scrollDOM.clientHeight);
-		const space: InkSpace = { id: newId(), after: { line: line.number - 1, hash: hashLine(line.text) }, height, pos: line.from };
+		const size = spaceSize(defaultSpaceHeight(this.view.scrollDOM.clientHeight), this.host.getSettings().a4DrawingSpaces);
+		const space: InkSpace = { id: newId(), after: { line: line.number - 1, hash: hashLine(line.text) }, ...size, pos: line.from };
 		this.store.editSpaces(path, { addSpaces: [{ space }] });
 	}
 
@@ -1293,15 +1313,23 @@ export class InkView implements PluginValue {
 	 * Commit strokes (replacing `removeIds`) and grow every space they land in so it holds them
 	 * (`grownHeight`), as ONE undoable op. `extra` adds space changes to the same op.
 	 */
-	private commitStrokes(path: string, removeIds: readonly string[], add: readonly Stroke[], extra: SpaceEdit = {}): void {
+	private commitStrokes(path: string, removeIds: readonly string[], add: readonly Stroke[], extra: SpaceEdit = {}): boolean {
 		const ink = this.store.get(path);
-		const known = new Map<string, number>();
-		for (const sp of ink?.spaces ?? []) known.set(sp.id, sp.height);
-		for (const a of extra.addSpaces ?? []) known.set(a.space.id, a.space.height);
+		const known = new Map((ink?.spaces ?? []).map((sp) => [sp.id, sp]));
+		for (const a of extra.addSpaces ?? []) known.set(a.space.id, a.space);
+		for (const s of add) {
+			const space = s.space ? known.get(s.space) : undefined;
+			const radius = s.size / 2;
+			if (space?.a4 && s.points.some(([, y]) => Math.abs(y - boundSpaceY(y, space.height, radius)) > 0.051)) {
+				new Notice("The drawing does not fit inside this A4 space.");
+				return false;
+			}
+		}
 		const resize: { id: string; height: number }[] = [...(extra.resize ?? [])];
 		for (const [id, bottom] of spaceInkBottoms(add)) {
-			const h0 = resize.find((r) => r.id === id)?.height ?? known.get(id);
-			if (h0 === undefined) continue;
+			const sp = known.get(id);
+			if (!sp || sp.a4) continue;
+			const h0 = resize.find((r) => r.id === id)?.height ?? sp.height;
 			const h = grownHeight(h0, bottom);
 			if (h === h0) continue;
 			const r = resize.find((x) => x.id === id);
@@ -1318,6 +1346,7 @@ export class InkView implements PluginValue {
 			if (removeIds.length === 0 && add.length === 1) this.store.addStroke(path, add[0]);
 			else this.store.replaceStrokes(path, removeIds, add);
 		} else this.store.editSpaces(path, { ...extra, resize, removeStrokeIds: [...removeIds], addStrokes: add });
+		return true;
 	}
 
 	/**
@@ -1361,11 +1390,16 @@ export class InkView implements PluginValue {
 		}
 		const plan = planMakeSpace(lines, inkTop, inkBottom);
 		if (!plan) return;
+		const size = spaceSize(plan.height, this.host.getSettings().a4DrawingSpaces);
+		if (size.a4 && (inkTop < plan.top || inkBottom > plan.top + size.height - SPACE_INK_PAD)) {
+			new Notice("The selection does not fit inside one A4 space.");
+			return;
+		}
 		const afterLine = doc.line(plan.after + 1);
 		// Ink first (positions refer to the current document), then the blank lines.
 		const id = newId();
-		const space: InkSpace = { id, after: { line: plan.after, hash: hashLine(afterLine.text) }, height: plan.height, pos: afterLine.from };
-		const rect: SpaceRect = { id, top: plan.top, height: plan.height };
+		const space: InkSpace = { id, after: { line: plan.after, hash: hashLine(afterLine.text) }, ...size, pos: afterLine.from };
+		const rect: SpaceRect = { id, top: plan.top, height: size.height };
 		const strokes = items.map(({ s, pts }) =>
 			this.anchoredStroke({ tool: s.tool, color: s.color, size: s.size, style: s.style, shape: s.shape }, pts, rect),
 		);
@@ -1395,12 +1429,18 @@ export class InkView implements PluginValue {
 				this.textHl.measure(ink?.strokes);
 				this.charA.measure(ink?.strokes); // [Stage H] characters of char-anchored ink (stale ones only)
 				const geo = this.readGeometry(view);
+				if (!this.host.getSettings().setSquare) this.guideOrigin = null;
+				else if (!this.guideOrigin) {
+					const scroller = view.scrollDOM;
+					this.guideOrigin = [geo.width / 2, Math.max(0, scroller.scrollTop - geo.top) + Math.min(140, scroller.clientHeight / 3)];
+				}
 				this.spaceCache = null; // [Stage K] CM has just measured
 				const spaces = this.spaceRects(); // [Stage K] for the space controls
 				return { geo, spaces };
 			},
 			write: ({ geo, spaces }: { geo: Geometry; spaces: SpaceBox[] }) => {
 				this.render(geo);
+				this.renderGuide();
 				this.spaceUi.apply(spaces, geo.left, geo.top, geo.width, !!this.path); // [Stage K]
 			},
 		});
@@ -1551,9 +1591,65 @@ export class InkView implements PluginValue {
 
 	/** Events on the context menu are left to its own handlers. */
 	private isUiTarget(target: EventTarget | null): boolean {
+		if (target === this.guideGrip) return true;
 		if (this.spaceUi.isControl(target)) return true; // [Stage K] space controls
 		return !!this.menuEl && target instanceof Node && this.menuEl.contains(target);
 	}
+
+	private guideEdges(): GuideEdge[] {
+		const settings = this.host.getSettings();
+		if (!this.guideOrigin || !settings.setSquare) return [];
+		return setSquareEdges(this.guideOrigin, settings.setSquareAngle, Math.max(30, Math.min(135, (this.geo?.width ?? 0) / 3)));
+	}
+
+	private renderGuide(): void {
+		const edges = this.guideEdges();
+		const shown = !!this.path && edges.length > 0;
+		this.guideOutline.classList.toggle("pl-hidden", !shown);
+		this.guideGrip.classList.toggle("pl-hidden", !shown);
+		if (!shown) return;
+		const [a, b, c] = edges.map(([from]) => from);
+		const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+		const dx = (b[0] - a[0]) / length;
+		const dy = (b[1] - a[1]) / length;
+		const halfCentimeter = 96 / 5.08;
+		let outline = `M ${a.join(" ")} L ${b.join(" ")} L ${c.join(" ")} Z`;
+		for (let mark = 1; mark * halfCentimeter < length; mark++) {
+			const distance = mark * halfCentimeter;
+			const x = a[0] + dx * distance;
+			const y = a[1] + dy * distance;
+			const size = mark % 2 === 0 ? 9 : 5;
+			outline += ` M ${x} ${y} l ${-dy * size} ${dx * size}`;
+		}
+		this.guideOutline.setAttribute("d", outline);
+		this.guideGrip.setAttribute("cx", String((a[0] + b[0] + c[0]) / 3));
+		this.guideGrip.setAttribute("cy", String((a[1] + b[1] + c[1]) / 3));
+	}
+
+	private readonly onGuideDown = (event: PointerEvent): void => {
+		if (!this.guideOrigin || this.active || this.guideDrag || event.button !== 0) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const [x, y] = this.toOverlay(event, this.svg.getBoundingClientRect());
+		try {
+			this.guideGrip.setPointerCapture(event.pointerId);
+		} catch {
+			return;
+		}
+		this.guideDrag = { id: event.pointerId, offset: [this.guideOrigin[0] - x, this.guideOrigin[1] - y] };
+	};
+
+	private readonly onGuideMove = (event: PointerEvent): void => {
+		const drag = this.guideDrag;
+		if (!drag || event.pointerId !== drag.id) return;
+		const [x, y] = this.toOverlay(event, this.svg.getBoundingClientRect());
+		this.guideOrigin = [x + drag.offset[0], y + drag.offset[1]];
+		this.renderGuide();
+	};
+
+	private readonly onGuideEnd = (event: PointerEvent): void => {
+		if (this.guideDrag?.id === event.pointerId) this.guideDrag = null;
+	};
 
 	/** Client coordinates → overlay coordinates. */
 	private clientToOverlay(clientX: number, clientY: number, rect: DOMRect): XY {
@@ -1718,9 +1814,16 @@ export class InkView implements PluginValue {
 		const el = svgEl("path");
 		paint(el, params);
 		(tool === "highlighter" ? this.gHlLive : this.gPenLive).appendChild(el);
+		// A stroke starting on a fixed page is bounded to that page from the first sample.
+		const sp = spaceAt(this.spaceRects(), y) ?? this.spaceAboveBlank(y);
+		const fixedHeight = sp && this.spaceById(sp.id)?.a4 ? sp.height : undefined;
+		const startY = sp && fixedHeight ? sp.top + boundSpaceY(y - sp.top, fixedHeight, params.size / 2) : y;
 		const smoother = new StrokeSmoother(SMOOTHING_PARAMS[settings.smoothing]);
-		smoother.push(x, y, p, eventTime(e));
-		const straight: XY | null = tool === "highlighter" && settings.highlighterStraight ? [x, y] : null;
+		smoother.push(x, startY, p, eventTime(e));
+		const edge = tool === "pen" && (settings.penShape === "freehand" || settings.penShape === "line")
+			? nearestGuideEdge([x, y], this.guideEdges(), 14) : null;
+		const shape = edge ? "line" : tool === "pen" ? settings.penShape : "freehand";
+		const straight: XY | null = tool === "highlighter" && settings.highlighterStraight ? [x, startY] : null;
 		const draw: DrawInput = {
 			kind: "draw",
 			...track,
@@ -1738,15 +1841,12 @@ export class InkView implements PluginValue {
 			holdTimer: null,
 			holdTried: false,
 			snap: null,
+			geometry: shape === "freehand" ? null : { shape, start: edge ? projectToEdge([x, startY], edge) : [x, startY], edge, end: null },
 			straight,
 			lastScribbleCheck: now,
 			scribble: new ScribbleTracker(),
-			space: null,
+			space: sp ? { id: sp.id, top: sp.top, fixedHeight } : null,
 		};
-		// [Stage K] a stroke starting in a drawing space belongs to it.
-		// Blank lines right below a space are room for it: a stroke started there grows it.
-		const sp = spaceAt(this.spaceRects(), y) ?? this.spaceAboveBlank(y);
-		if (sp) draw.space = { id: sp.id, top: sp.top };
 		if (straight) draw.points = straightLine(straight, straight);
 		this.active = draw;
 		this.armHold(draw);
@@ -1816,14 +1916,19 @@ export class InkView implements PluginValue {
 		const list = evs.length > 0 ? evs : [e];
 		const now = performance.now();
 		for (const ev of list) {
-			const [x, y, p] = this.toOverlay(ev, rect);
+			const [x, rawY, p] = this.toOverlay(ev, rect);
+			const y = a.kind === "draw" ? this.boundDrawY(a, rawY) : rawY;
 			if (a.kind === "drag") {
 				a.cur = [x, y];
 				a.maxMove = Math.max(a.maxMove, Math.hypot(x - a.start[0], y - a.start[1]));
 				continue;
 			}
-			a.maxMove = Math.max(a.maxMove, Math.hypot(x - a.downX, y - a.downY));
+			a.maxMove = Math.max(a.maxMove, Math.hypot(x - a.downX, rawY - a.downY));
 			if (a.kind === "draw") {
+				if (a.geometry) {
+					a.geometry.end = [x, y];
+					continue;
+				}
 				if (a.snap) {
 					a.snap.pen = [x, y];
 					continue;
@@ -1915,7 +2020,16 @@ export class InkView implements PluginValue {
 			this.commitDrag(a);
 			return;
 		}
-		if (a.kind === "draw") this.clearHold(a);
+		if (a.kind === "draw") {
+			this.clearHold(a);
+			if (a.geometry) {
+				const [x, y] = this.toOverlay(e, this.svg.getBoundingClientRect());
+				const boundedY = this.boundDrawY(a, y);
+				a.maxMove = Math.max(a.maxMove, Math.hypot(x - a.downX, y - a.downY));
+				a.geometry.end = [x, boundedY];
+				this.updateDrawGeometry(a);
+			}
+		}
 		if (a.kind === "lasso") {
 			this.clearPress(a);
 			// The long-press already showed Paste; the lift itself does nothing.
@@ -1971,7 +2085,7 @@ export class InkView implements PluginValue {
 	/** [Stage K] Drawing near a space's bottom grows it live (saved with the stroke). */
 	private growLive(a: DrawInput): void {
 		const sp = a.space && this.spaceById(a.space.id);
-		if (!sp || !a.space) return;
+		if (!sp || sp.a4 || !a.space) return;
 		let maxY = -Infinity;
 		for (const p of a.points) if (p[1] > maxY) maxY = p[1];
 		const tip = a.smoother.tip;
@@ -2046,6 +2160,7 @@ export class InkView implements PluginValue {
 			const a = this.active;
 			if (!a) return;
 			if (a.kind === "draw") {
+				if (a.geometry) this.updateDrawGeometry(a);
 				if (a.snap) this.updateSnap(a);
 				// [Stage C] live preview: a highlighter stroke over typed text shows the snapped rects.
 				const snapped =
@@ -2074,6 +2189,7 @@ export class InkView implements PluginValue {
 	 * from the filtered points + tip.
 	 */
 	private livePath(a: DrawInput): string {
+		if (a.geometry && !a.snap) return "";
 		if (a.snap || a.straight || a.finalized) return strokeToPath(this.drawShape(a), { last: true });
 		const sm = a.smoother;
 		if (!a.curve) return strokeToPath({ ...this.drawShape(a), points: sm.livePoints() }, { last: false });
@@ -2104,6 +2220,10 @@ export class InkView implements PluginValue {
 
 	private finishStroke(a: DrawInput): void {
 		const path = this.path;
+		if (a.geometry && !a.snap) {
+			this.discardInput(a);
+			return;
+		}
 		this.finalizePoints(a);
 		if (!path || !this.store.isLoaded(path) || a.points.length === 0) {
 			this.dropLiveHeight(a);
@@ -2141,14 +2261,11 @@ export class InkView implements PluginValue {
 			this.scheduleRender();
 			return;
 		}
-		// Show the final shape right away; the element is swapped for the stored stroke on next render.
-		a.el.setAttribute("d", strokeToPath(this.drawShape(a)));
-		this.pendingLive.push(a.el);
-
 		// [Stage K] which space: the one it started in; below the note's end: the end space (new or grown).
-		const box = bbox(a.points);
+		let box = bbox(a.points);
 		let rect: SpaceRect | null = null;
 		let extra: SpaceEdit = {};
+		let fixed = false;
 		const live = a.space ? this.liveHeights.get(a.space.id) : undefined;
 		if (a.space) {
 			this.liveHeights.delete(a.space.id);
@@ -2156,6 +2273,7 @@ export class InkView implements PluginValue {
 			const cur = this.spaceRects().find((r) => r.id === a.space!.id);
 			if (sp && cur) {
 				rect = { id: sp.id, top: cur.top, height: sp.height };
+				fixed = sp.a4 === true;
 				if (live !== undefined && live > sp.height) extra = { resize: [{ id: sp.id, height: live }] };
 			}
 		} else if (box) {
@@ -2170,17 +2288,27 @@ export class InkView implements PluginValue {
 					const run = blankRunBelow(this.blankLine, doc.lines, this.boxLine(lastBox));
 					if (run?.toEnd && this.marginOn(run.first, run.last).length === 0) last = { ...lastBox, end: true };
 				}
-				const plan = endSpacePlan(last, docBottom, box.maxY + a.size / 2);
+				const a4 = settings.a4DrawingSpaces;
+				const plan = endSpacePlan(last && { ...last, a4: this.spaceById(last.id)?.a4 }, docBottom, box.maxY + a.size / 2, a4);
 				if (plan.extend) {
 					rect = { id: plan.extend, top: plan.top, height: plan.height };
 					extra = { resize: [{ id: plan.extend, height: plan.height }] };
 				} else {
-					const space: InkSpace = { id: newId(), after: "end", height: plan.height };
+					const space: InkSpace = { id: newId(), after: "end", ...spaceSize(plan.height, a4) };
 					rect = { id: space.id, top: plan.top, height: plan.height };
 					extra = { addSpaces: [{ space }] };
+					fixed = a4;
 				}
 			}
 		}
+		if (fixed && rect && !a.snap) {
+			const { top, height } = rect;
+			a.points = a.points.map(([x, y, p]): Point => [x, top + boundSpaceY(y - top, height, a.size / 2), p]);
+			box = bbox(a.points);
+		}
+		// Show the final shape until the next render replaces it with the stored stroke.
+		a.el.setAttribute("d", strokeToPath(this.drawShape(a)));
+		this.pendingLive.push(a.el);
 		// The drawing started on blank lines just above this space: those lines' ink joins it.
 		const absorb = box ? this.absorbTarget(a, rect, extra, box) : null;
 		if (absorb) {
@@ -2210,7 +2338,11 @@ export class InkView implements PluginValue {
 			this.charA.drawn(stroke, box);
 		}
 		if (this.geo) this.store.setContentWidth(path, Math.round(this.geo.width));
-		this.commitStrokes(path, [], [stroke], extra);
+		if (!this.commitStrokes(path, [], [stroke], extra)) {
+			a.el.remove();
+			this.scheduleRender();
+			return;
+		}
 		if (box) {
 			const now = performance.now();
 			this.recentInk = pruneRecentInk(this.recentInk, now);
@@ -2394,9 +2526,27 @@ export class InkView implements PluginValue {
 	/** (Re)start the hold timer for a pen stroke unless one is running or the stroke snapped. */
 	private armHold(a: DrawInput): void {
 		const s = this.host.getSettings();
-		if (a.tool !== "pen" || !s.shapeSnap || a.snap || a.holdTimer !== null || a.holdTried) return;
+		if (a.tool !== "pen" || !s.shapeSnap || a.geometry || a.snap || a.holdTimer !== null || a.holdTried) return;
 		const wait = Math.max(10, s.shapeHoldMs - (performance.now() - a.lastMoveAt));
 		a.holdTimer = window.setTimeout(() => this.onHold(a), wait);
+	}
+
+	private boundDrawY(a: DrawInput, y: number): number {
+		const space = a.space;
+		return space?.fixedHeight ? space.top + boundSpaceY(y - space.top, space.fixedHeight, a.size / 2) : y;
+	}
+
+	private updateDrawGeometry(a: DrawInput): void {
+		const geometry = a.geometry;
+		if (!geometry?.end || a.maxMove < TAP.maxMove) return;
+		const end = geometry.edge ? projectToEdge(geometry.end, geometry.edge) : geometry.end;
+		if (Math.hypot(end[0] - geometry.start[0], end[1] - geometry.start[1]) < TAP.maxMove) {
+			a.snap = null;
+			return;
+		}
+		const spec = draggedShape(geometry.shape, geometry.start, end);
+		a.snap = { spec0: spec, spec, p0: geometry.start, pen: null };
+		a.points = shapeToPoints(spec).map(([px, py]): Point => [px, py, 0.5]);
 	}
 
 	private clearHold(a: DrawInput): void {
@@ -2675,11 +2825,11 @@ export class InkView implements PluginValue {
 		const keep = sel.filter((s) => !replaced.includes(s));
 		// Set first: the store's change event validates the selection against the canvas.
 		this.selection = [...keep, ...next];
-		this.commitStrokes(
+		if (!this.commitStrokes(
 			path,
 			replaced.map((s) => s.id),
 			next,
-		); // [Stage K] spaces grow to hold ink moved into them
+		)) this.selection = sel;
 		this.scheduleRender();
 	}
 
@@ -2704,8 +2854,9 @@ export class InkView implements PluginValue {
 		const topOf = (s: Stroke) => this.lineTop(s);
 		const copies = this.groupCopies(this.textHl.asFreehand(this.orderedSelection(), topOf), t); // [Stage C/K]
 		this.anchorGroup(copies); // [Stage H]
+		const previous = this.selection;
 		this.selection = copies;
-		this.commitStrokes(path, [], copies);
+		if (!this.commitStrokes(path, [], copies)) this.selection = previous;
 		this.scheduleRender();
 		this.host.inkSelectionChanged(); // [Stage F]
 	}
@@ -2760,8 +2911,9 @@ export class InkView implements PluginValue {
 		const strokes = placed.map(({ stroke, points }) => this.anchoredStroke(stroke, points, sp));
 		this.anchorGroup(strokes); // [Stage H]
 		if (this.geo) this.store.setContentWidth(path, Math.round(this.geo.width));
+		const previous = this.selection;
 		this.selection = strokes;
-		this.commitStrokes(path, [], strokes);
+		if (!this.commitStrokes(path, [], strokes)) this.selection = previous;
 		this.scheduleRender();
 		this.host.inkSelectionChanged(); // [Stage F]
 	}
