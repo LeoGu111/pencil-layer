@@ -1149,14 +1149,24 @@ export function recognizeMathFromStrokes(strokes: readonly Stroke[]): string {
 	return parseTokens(glyphs);
 }
 
+/** Strip leading/trailing `$` or `$$` delimiters from raw LaTeX text. */
+export function stripLatexDelimiters(rawTex: string): string {
+	return rawTex.trim().replace(/^\$+|\$+$/g, "").trim();
+}
+
+/** Whether the given cleaned LaTeX expression should be formatted as display block math (`$$...$$`). */
+export function isBlockLatex(tex: string, delimiters: MathDelimiters): boolean {
+	return (
+		delimiters === "block" ||
+		(delimiters === "auto" && (/\\frac|\\sum|\\int|\\sqrt/.test(tex) || tex.includes("\n")))
+	);
+}
+
 /** Wrap raw LaTeX in Obsidian `$...$` / `$$...$$` delimiters. */
 export function formatLatexFormula(rawTex: string, delimiters: MathDelimiters): string {
-	const tex = rawTex.trim().replace(/^\$+|\$+$/g, "").trim();
+	const tex = stripLatexDelimiters(rawTex);
 	if (!tex) return "";
-	const useBlock =
-		delimiters === "block" ||
-		(delimiters === "auto" && (/\\frac|\\sum|\\int|\\sqrt/.test(tex) || tex.includes("\n")));
-	return useBlock ? `$$\n${tex}\n$$` : `$${tex}$`;
+	return isBlockLatex(tex, delimiters) ? `$$\n${tex}\n$$` : `$${tex}$`;
 }
 
 /** Extract clean LaTeX from an AI model response (strips markdown fences and surrounding `$`). */
