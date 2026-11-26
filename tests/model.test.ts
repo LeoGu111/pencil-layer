@@ -526,6 +526,22 @@ describe("v2 compact format", () => {
 		expect(d).toEqual({ id: "s1", tool: "pen", color: "ink", size: 3, style: "notes", anchor: { line: 2, hash: "abc" }, xy: [10, 20, 10, 0], p: [25, 50] });
 	});
 
+	it("round-trips pencil tilt channel t in v2 and omits it when absent", () => {
+		const tilted = stroke({
+			style: "pencil",
+			points: [[1, 2, 0.4], [3, 4, 0.6], [6, 8, 0.8]],
+			tilts: [0, 0.5, 0.9],
+		});
+		const d = serializeStroke(tilted);
+		expect(d.t).toEqual([0, 50, 40]);
+		const parsed = parseInkFile(serializeInkFile({ version: 2, contentWidth: 0, strokes: [tilted] }));
+		expect(parsed.strokes[0].style).toBe("pencil");
+		expect(parsed.strokes[0].tilts).toEqual([0, 0.5, 0.9]);
+
+		const upright = stroke({ style: "ball", points: [[1, 2, 0.5], [3, 4, 0.5]] });
+		expect(serializeStroke(upright).t).toBeUndefined();
+	});
+
 	it("is at least 2.5x smaller than v1 on a realistic page of handwriting", () => {
 		const ink = realisticInk();
 		const nPts = ink.strokes.reduce((n, s) => n + s.points.length, 0);

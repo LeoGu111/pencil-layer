@@ -26,10 +26,8 @@
 import { App, MarkdownPostProcessorContext, MarkdownRenderChild, MarkdownView, Plugin, TFile } from "obsidian";
 import { dashArray, isCenterline, strokeToPath, bbox } from "./geometry";
 import { InkFile, Stroke, isEmptyInk, resolveAnchor } from "./model";
-import { SpaceSlot, blockEnds, readingPlacement, shiftBelowSpaces, spaceSlots } from "./spaces"; // [Stage K]
 import type { PencilSettings } from "./settings";
 import { InkTarget, PAPER_INK, inkColor } from "./inkColor"; // [Stage L]
-import { Band, Pager, inSlice, padExtents, planSlices } from "./printSlices"; // [Stage L]
 import type { InkStore } from "./store";
 import { Row, mergeRows, rowsPath } from "./textHighlight";
 import { charNeedle, charOrigin } from "./charAnchor";
@@ -47,9 +45,7 @@ import {
 	normalizeWithMap,
 	normalizeWs,
 	ownedRange,
-	printAreaHeight,
 	printAreaWidth,
-	PRINT_PAGE_CLEARANCE,
 	rangePieces,
 	reserveSpace,
 	sectionKind,
@@ -89,12 +85,8 @@ const GAP_ATTR = "data-pl-gap";
 const HOST_CLASS = "pl-reading-host";
 /** [Stage I] Spacer inside the note's last section: room for ink below the end of the note. */
 const ROOM_CLASS = "pl-reading-room";
-/** [Stage K] A drawing space: an in-flow block of exactly its height, with its ink. */
+/** Legacy space block class (cleaned up if present on re-render). */
 const SPACE_CLASS = "pl-reading-space";
-/** [Stage L] A page slice of a space taller than a printed page (also has SPACE_CLASS). */
-const SLICE_CLASS = "pl-reading-space-slice";
-/** [Stage L] Print: room kept free at the end of the page a first slice ends on (model errors). */
-const SLICE_SAFETY = 24;
 
 interface Section {
 	el: HTMLElement;
@@ -110,8 +102,6 @@ interface Layout {
 	lineEnd: number;
 	range: LineRange;
 	print: boolean;
-	/** [Stage K] Print: spaces up to this height (layout px) never break across pages. */
-	pageHeight?: number;
 	/**
 	 * Document-style print: line height of the text / the editor's. Ink offsets from the text it
 	 * hangs off (character or line) scale by it; the strokes themselves don't (docStyle.ts).
@@ -182,156 +172,7 @@ function isOurs(n: Element): boolean {
 	return n.classList.contains(SVG_CLASS) || n.classList.contains(ROOM_CLASS) || n.classList.contains(SPACE_CLASS);
 }
 
-// ---------------------------------------------------------------------------------------------
-// [Stage K] Drawing spaces (same placement rules as the editor: spaces.ts)
-// ---------------------------------------------------------------------------------------------
-
-let endsMemo: { lines: readonly string[]; ends: Int32Array } | null = null;
-function endsOf(lines: readonly string[]): Int32Array {
-	if (endsMemo?.lines === lines) return endsMemo.ends;
-	const ends = blockEnds(lines);
-	endsMemo = { lines, ends };
-	return ends;
-}
-
-let slotsMemo: { lines: readonly string[]; key: string; slots: SpaceSlot[] } | null = null;
-
-/** The note's spaces with the line each is shown after (memoized: every section of a note asks). */
-function spacePlan(lines: readonly string[], ink: InkFile): SpaceSlot[] {
-	const list = ink.spaces ?? [];
-	if (list.length === 0) return [];
-	const key = list.map((p) => `${p.id}:${p.height}:${p.after === "end" ? "e" : `${p.after.line}/${p.after.hash}`}`).join();
-	if (slotsMemo && slotsMemo.lines === lines && slotsMemo.key === key) return slotsMemo.slots;
-	const slots = spaceSlots(lines, list, endsOf(lines));
-	slotsMemo = { lines, key, slots };
-	return slots;
-}
-
-/** [Stage L] The ink of each printed space block (page slices are cut from it). */
-const blockInk = new WeakMap<HTMLElement, Stroke[]>();
-
-/** An SVG drawing `strokes` (points relative to its top-left) in z-order, at (0, top). */
-function inkSvg(doc: Document, strokes: readonly Stroke[], print: boolean, top = 0): SVGSVGElement {
-	const svg = svgEl(doc, "svg");
-	svg.setAttribute("class", SVG_CLASS);
-	svg.setAttribute("aria-hidden", "true");
-	Object.assign(svg.style, { position: "absolute", left: "0", top: `${top}px`, overflow: "visible", pointerEvents: "none", zIndex: "5" });
-	if (doc.body.classList.contains("theme-light") || print) svg.classList.add("pl-multiply");
-	svg.setAttribute("width", "1");
-	svg.setAttribute("height", "1");
-	const gHl = svgEl(doc, "g");
-	const gPen = svgEl(doc, "g");
-	svg.append(gHl, gPen);
-	const target: InkTarget = print ? "paper" : "screen";
-	for (const s of strokes) {
-		const path = svgEl(doc, "path");
-		path.setAttribute("d", pathOf(s));
-		paintPath(path, s, target);
-		(s.tool === "highlighter" ? gHl : gPen).appendChild(path);
-	}
-	return svg;
-}
-
-/**
- * A space block: `height` px of room with the space's ink (points relative to its top-left), in
- * z-order. `pad` (≥ 0) = room above it that moves it down to where the editor shows it.
- */
-/** An aria-hidden div created in `doc` (popout-window safe) but not yet attached anywhere. */
-function detachedDiv(doc: Document, cls: string): HTMLDivElement {
-	return doc.createDocumentFragment().createDiv({ cls, attr: { "aria-hidden": "true" } });
-}
-
-function spaceBlock(doc: Document, slot: SpaceSlot, ink: InkFile, print: boolean, pageHeight?: number): HTMLElement {
-	const div = detachedDiv(doc, SPACE_CLASS);
-	div.setAttribute("data-pl-space", slot.id);
-	Object.assign(div.style, { position: "relative", display: "block", height: `${slot.height}px`, margin: "0", padding: "0", boxSizing: "content-box" });
-	// A space that fits on a page never breaks across pages (its drawing stays whole). [Stage L] A
-	// taller one is cut into page slices once the whole export is laid out (`paginateSpaces`).
-	if (print) div.style.breakInside = pageHeight !== undefined && slot.height > pageHeight ? "auto" : "avoid";
-	const strokes = ink.strokes.filter((s) => s.space === slot.id && s.points.length > 0);
-	if (print) blockInk.set(div, strokes);
-	if (strokes.length === 0) return div;
-	div.appendChild(inkSvg(doc, strokes, print));
-	return div;
-}
-
-const extentCache = new WeakMap<Stroke, Band>();
-/** [Stage L] Vertical extent of a stroke (incl. half its width), relative to its origin. */
-function extentOf(s: Stroke): Band {
-	let e = extentCache.get(s);
-	if (!e) {
-		const b = bbox(s.points);
-		e = b ? { from: b.minY - s.size / 2, to: b.maxY + s.size / 2 } : { from: 0, to: 0 };
-		extentCache.set(s, e);
-	}
-	return e;
-}
-
-/**
- * [Stage L] Print: cut every space taller than a page into page slices (see printSlices.ts), in
- * document order, modelling where our blocks fall on the pages. `origin` = layout y of the top of
- * the first page. Each replacement has the block's total height, so nothing else moves.
- */
-function paginateSpaces(container: HTMLElement, origin: number, pageHeight: number): void {
-	const doc = container.ownerDocument;
-	const pager = new Pager(pageHeight, origin);
-	const blocks = Array.from(container.querySelectorAll<HTMLElement>(`.${SPACE_CLASS}`));
-	for (const b of blocks) {
-		const r = b.getBoundingClientRect();
-		const pad = parseFloat(b.style.paddingTop) || 0;
-		const height = r.height - pad;
-		if (height <= pageHeight) {
-			pager.avoid(r.top, r.height);
-			continue;
-		}
-		const strokes = blockInk.get(b) ?? [];
-		const plan = planSlices(height, padExtents(strokes.map(extentOf)), {
-			pageHeight,
-			firstRoom: pager.room(r.top + pad) - SLICE_SAFETY,
-		});
-		const id = b.getAttribute("data-pl-space") ?? "";
-		const parts: HTMLElement[] = [];
-		if (plan.breakFirst && pad > 0) {
-			// Too little room on this page: the pad stays here, the drawing starts on the next page.
-			const sp = detachedDiv(doc, SLICE_CLASS);
-			Object.assign(sp.style, { display: "block", height: `${pad}px`, margin: "0", padding: "0" });
-			parts.push(sp);
-		}
-		plan.slices.forEach((sl, k) => {
-			const div = detachedDiv(doc, `${SPACE_CLASS} ${SLICE_CLASS}`);
-			div.setAttribute("data-pl-space", id);
-			div.setAttribute("data-pl-slice", String(k));
-			const top = k === 0 && !plan.breakFirst ? pad : 0;
-			Object.assign(div.style, {
-				position: "relative",
-				display: "block",
-				height: `${sl.to - sl.from}px`,
-				margin: "0",
-				padding: `${top}px 0 0 0`,
-				boxSizing: "content-box",
-				overflow: "hidden",
-				breakInside: "avoid",
-			});
-			if (k > 0 || plan.breakFirst) div.classList.add("pl-break-before");
-			const mine = strokes.filter((s) => inSlice(extentOf(s), sl));
-			if (mine.length > 0) div.appendChild(inkSvg(doc, mine, true, top - sl.from));
-			parts.push(div);
-		});
-		b.replaceWith(...parts);
-		// Every slice after the first starts a page; the content after the last one follows it.
-		const last = parts[parts.length - 1];
-		if (parts.length > 1 || plan.breakFirst) pager.pageAt(last.getBoundingClientRect().top);
-	}
-}
-
-/** Move a space block down by `pad` px (room above it; its ink moves along). */
-function padSpace(el: HTMLElement, pad: number): void {
-	el.style.paddingTop = `${Math.max(0, Math.round(pad * 100) / 100)}px`;
-	const svg = el.querySelector<SVGSVGElement>(`:scope > .${SVG_CLASS}`);
-	if (svg) svg.style.top = el.style.paddingTop;
-}
-
-/** Remove a section's space blocks (they are re-inserted on every layout). */
+/** Remove a section's legacy space blocks if any exist. */
 function removeSpaces(el: HTMLElement): void {
 	for (const c of Array.from(el.querySelectorAll(`.${SPACE_CLASS}`))) c.remove();
 }
@@ -526,6 +367,7 @@ function paintPath(el: SVGPathElement, s: Pick<Stroke, "tool" | "style" | "size"
 	// [Stage L] theme-adaptive on screen (CSS variables), black on white paper in print.
 	const color = inkColor(s.color, target, s.tool);
 	if (s.tool === "highlighter") el.setAttribute("opacity", HL_OPACITY);
+	else if (s.style === "pencil") el.setAttribute("opacity", "0.78");
 	if (isCenterline(s)) {
 		el.setAttribute("fill", "none");
 		el.setAttribute("stroke", color);
@@ -591,16 +433,11 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	const doc = el.ownerDocument;
 	const strokes = ink.strokes;
 	const { lines, lineStart, lineEnd, range } = lay;
-	// [Stage K] spaces after this section's lines; their ink is drawn by them.
-	const slots = spacePlan(lines, ink);
-	const spaceIds = new Set(slots.map((x) => x.id));
-	const here = slots.filter((x) => x.line >= range.from && x.line <= range.to);
 	// Which strokes belong here? (resolve first: cheap, cached; no layout reads yet)
 	const own: { s: Stroke; line: number; charLine?: number }[] = [];
 	const texts: { s: Stroke; line: number; pieces: { line: number; from: number; to: number }[] }[] = [];
 	for (const s of strokes) {
 		if (s.points.length === 0 && !s.text) continue;
-		if (s.space && spaceIds.has(s.space)) continue;
 		const line = resolveLine(s, lines);
 		if (s.text && s.tool === "highlighter") {
 			const endLine = Math.min(lines.length - 1, Math.max(line, line + s.text.endLine - s.anchor.line));
@@ -619,26 +456,9 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	}
 	const existing = Array.from(el.children).filter((c) => c.classList.contains(SVG_CLASS));
 	removeSpaces(el);
-	if (own.length === 0 && texts.length === 0 && here.length === 0) {
+	if (own.length === 0 && texts.length === 0) {
 		clearSection(el);
 		return 0;
-	}
-
-	// [Stage K] 1. Spaces after a list item in the middle of a list: inside that item (before its
-	// nested list), so the items below move down as in the editor.
-	const appended: SpaceSlot[] = [];
-	if (here.length > 0) {
-		const lis = Array.from(el.querySelectorAll("li"));
-		const items = lis.length > 0 ? listItemLines(lines, lineStart, lineEnd) : [];
-		const itemLines = items.length === lis.length && items.length > 0 ? items : null;
-		for (const slot of here) {
-			const pl = readingPlacement(slot.line, lineStart, lineEnd, range.from, range.to, itemLines, endsOf(lines));
-			if (pl?.kind === "item") {
-				const li = lis[pl.index];
-				const nested = Array.from(li.children).find((c) => c.tagName === "UL" || c.tagName === "OL") ?? null;
-				li.insertBefore(spaceBlock(doc, slot, ink, lay.print, lay.pageHeight), nested);
-			} else appended.push(slot);
-		}
 	}
 
 	// Layout reads.
@@ -648,47 +468,8 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	const height = contentBottom(el, top);
 	const lh = lineHeightOf(el);
 	const marks = measureMarks(el, lines, lineStart, lineEnd, top);
-	const yOf0 = (line: number) => lineTop(line, marks, lineStart, lineEnd, height, lh);
-	// Blank lines after the section's content move down by the spaces appended above them.
-	const yOf = (line: number) => yOf0(line) + (line > lineEnd ? shiftBelowSpaces(line, appended) : 0);
+	const yOf = (line: number) => lineTop(line, marks, lineStart, lineEnd, height, lh);
 	const target: InkTarget = lay.print ? "paper" : "screen";
-
-	// [Stage K] 2. Spaces after the section's last line (or a blank line after it): blocks after
-	// its content (before the room spacer), each moved to where the editor has it: the top of the
-	// line after the one it follows (`yOf`, the mapping line-anchored ink uses).
-	let spacesBottom = -Infinity;
-	if (appended.length > 0) {
-		const room = Array.from(el.children).find((c) => c.classList.contains(ROOM_CLASS)) ?? null;
-		const blocks = appended.map((slot) => {
-			const b = spaceBlock(doc, slot, ink, lay.print, lay.pageHeight);
-			el.insertBefore(b, room);
-			return b;
-		});
-		let above = 0;
-		appended.forEach((slot, k) => {
-			const b = blocks[k];
-			const want = yOf0(slot.line + 1) + above;
-			const now = b.getBoundingClientRect().top - top;
-			const delta = want - now;
-			if (delta >= 0.5) padSpace(b, delta);
-			else if (delta <= -0.5) {
-				// Above the block's natural place (the paragraph's bottom margin): pull it up; the negative
-				// margin collapses with that margin. Measured again: a margin that doesn't collapse fully
-				// is corrected by padding.
-				b.style.marginTop = `${Math.round(delta * 100) / 100}px`;
-				const rest = want - (b.getBoundingClientRect().top - top);
-				if (rest >= 0.5) padSpace(b, rest);
-			}
-			above += slot.height;
-			spacesBottom = b.getBoundingClientRect().bottom - top;
-		});
-	}
-
-	if (own.length === 0 && texts.length === 0) {
-		for (const c of existing) c.remove();
-		setGap(el, 0);
-		return 0;
-	}
 
 	const svg = svgEl(doc, "svg");
 	svg.setAttribute("class", SVG_CLASS);
@@ -757,11 +538,8 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	el.appendChild(svg);
 	// Room for ink drawn in the blank lines below the block (they collapse in Reading view).
 	// The note's last section also makes room for ink drawn below the end of the note (Stage I).
-	// [Stage K] Spaces appended at the end count as content; blank lines after the last one only.
 	const atEnd = range.to >= lines.length - 1;
-	const lastSpaceLine = appended.length > 0 ? appended[appended.length - 1].line : lineEnd;
-	const base = Math.max(height, spacesBottom);
-	setGap(el, reserveSpace(inkBottom, base, range.to - Math.max(lineEnd, lastSpaceLine), lh, { atEnd, pad: atEnd ? 2 : 4 }), atEnd, base);
+	setGap(el, reserveSpace(inkBottom, height, range.to - lineEnd, lh, { atEnd, pad: atEnd ? 2 : 4 }), atEnd, height);
 	return drawn;
 }
 
@@ -967,11 +745,7 @@ export class ReadingInk {
 		// Document style first (synchronously, even without ink): everything measured below — block
 		// heights, line marks, character rects — is measured against the document-style text.
 		this.applyStyle(el, style);
-		if (!withInk) {
-			// [Stage K] drawing spaces print without ink too (the layout doesn't change).
-			const known = this.host.store.get(path);
-			if (known && (known.spaces?.length ?? 0) === 0) return;
-		}
+		if (!withInk) return;
 		const promises = (ctx as unknown as { promises?: Promise<unknown>[] }).promises;
 		let self: Promise<void> | null = null;
 		self = (async () => {
@@ -1072,29 +846,25 @@ export class ReadingInk {
 		return { blocks, hosts };
 	}
 
-	private drawHosts(container: HTMLElement, lines: readonly string[], hosts: Host[], ink: InkFile, pageHeight: number, yScale: number): void {
+	private drawHosts(container: HTMLElement, lines: readonly string[], hosts: Host[], ink: InkFile, yScale: number): void {
 		if (isEmptyInk(ink)) return;
 		if (hosts.length === 0) {
 			// No metadata: the whole note as one block (proportional placement).
-			drawSection(container, { lines, lineStart: 0, lineEnd: lines.length - 1, range: { from: 0, to: lines.length - 1 }, print: true, pageHeight, yScale }, ink);
+			drawSection(container, { lines, lineStart: 0, lineEnd: lines.length - 1, range: { from: 0, to: lines.length - 1 }, print: true, yScale }, ink);
 			return;
 		}
 		hosts.forEach((h, i) => {
 			const nextStart = i + 1 < hosts.length ? hosts[i + 1].lineStart : lines.length;
 			const range = ownedRange(lines, h.lineStart, h.lineEnd, { nextStart, isFirst: i === 0 });
-			drawSection(h.el, { lines, lineStart: h.lineStart, lineEnd: h.lineEnd, range, print: true, pageHeight, yScale }, ink);
+			drawSection(h.el, { lines, lineStart: h.lineStart, lineEnd: h.lineEnd, range, print: true, yScale }, ink);
 		});
 	}
 
-	private layoutPrint(container: HTMLElement, file: TFile, text: string, ink: InkFile, cfg: unknown, page: HTMLElement | null, style: ExportStyle): void {
+	private layoutPrint(container: HTMLElement, file: TFile, text: string, ink: InkFile, _cfg: unknown, _page: HTMLElement | null, style: ExportStyle): void {
 		const lines = splitLines(text);
 		const { hosts } = this.printBlocks(container, file);
-		// [Stage K] a space up to one printable page tall (layout px) never breaks across pages.
-		const pageHeight = printAreaHeight(cfg) - PRINT_PAGE_CLEARANCE;
 		// Document style: its body text has its own line height; ink was drawn against the editor's.
 		const yScale = style === "document" ? inkYScale(lineHeightOf(container), this.editorLineHeight(file.path)) : 1;
-		this.drawHosts(container, lines, hosts, ink, pageHeight, yScale);
-		// [Stage L] taller spaces: page slices. The first page starts at the top of the print root.
-		paginateSpaces(container, (page ?? container).getBoundingClientRect().top, pageHeight);
+		this.drawHosts(container, lines, hosts, ink, yScale);
 	}
 }

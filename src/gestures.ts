@@ -33,13 +33,13 @@ export type XY = [number, number];
 
 export const TAP = {
 	/** A tap is a pen contact shorter than this (ms)… */
-	maxMs: 120,
-	/** …that moved less than this (px): nearly no movement. */
-	maxMove: 3,
+	maxMs: 180,
+	/** …that moved less than this (px): tolerates slight Pencil tip parallax on glass. */
+	maxMove: 6,
 	/** Second tap must start within this time after the first ended (ms)… */
-	maxGapMs: 280,
+	maxGapMs: 340,
 	/** …and within this distance of the first (px). */
-	maxDist: 6,
+	maxDist: 14,
 } as const;
 
 /**

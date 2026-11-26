@@ -83,15 +83,15 @@ function dot(t: number, x: number, y: number, ms = 45, move = 0.6): Contact {
 describe("tap rules", () => {
 	it("a tap is very short and nearly motionless", () => {
 		expect(isTap({ x: 0, y: 0, downAt: 0, upAt: 100, maxMove: 1 })).toBe(true);
-		expect(isTap({ x: 0, y: 0, downAt: 0, upAt: 130, maxMove: 1 })).toBe(false); // 130 ms: a press
-		expect(isTap({ x: 0, y: 0, downAt: 0, upAt: 60, maxMove: 4 })).toBe(false); // moved 4 px
+		expect(isTap({ x: 0, y: 0, downAt: 0, upAt: 210, maxMove: 1 })).toBe(false); // 210 ms: a press
+		expect(isTap({ x: 0, y: 0, downAt: 0, upAt: 60, maxMove: 7.5 })).toBe(false); // moved 7.5 px
 	});
 
-	it("pairs only very close (< 6 px) and quick (< 280 ms) taps", () => {
+	it("pairs only very close (< 14 px) and quick (< 340 ms) taps", () => {
 		const a: Tap = { x: 100, y: 100, downAt: 0, upAt: 50, maxMove: 0.5 };
 		expect(isDoubleTap(a, { x: 103, y: 103, downAt: 250, upAt: 290, maxMove: 0.5 })).toBe(true);
-		expect(isDoubleTap(a, { x: 105, y: 104, downAt: 250, upAt: 290, maxMove: 0.5 })).toBe(false); // 6.4 px
-		expect(isDoubleTap(a, { x: 100, y: 100, downAt: 340, upAt: 380, maxMove: 0.5 })).toBe(false); // 290 ms gap
+		expect(isDoubleTap(a, { x: 115, y: 108, downAt: 250, upAt: 290, maxMove: 0.5 })).toBe(false); // ~19 px
+		expect(isDoubleTap(a, { x: 100, y: 100, downAt: 420, upAt: 460, maxMove: 0.5 })).toBe(false); // 370 ms gap
 	});
 
 	it("the writing guard: ink finished < 1.5 s ago within 40 px blocks a tap", () => {
@@ -174,9 +174,9 @@ describe("a real double tap still works", () => {
 	});
 
 	it("but not with slow, moving or spread-out taps", () => {
-		expect(replay([dot(0, 50, 50, 140), dot(250, 51, 50)]).toggles).toBe(0); // first tap 140 ms
-		expect(replay([dot(0, 50, 50, 50, 3.5), dot(200, 51, 50)]).toggles).toBe(0); // first tap moved
-		expect(replay([dot(0, 50, 50), dot(200, 58, 50)]).toggles).toBe(0); // 8 px apart
-		expect(replay([dot(0, 50, 50), dot(350, 51, 50)]).toggles).toBe(0); // 305 ms gap
+		expect(replay([dot(0, 50, 50, 210), dot(250, 51, 50)]).toggles).toBe(0); // first tap 210 ms (too slow)
+		expect(replay([dot(0, 50, 50, 50, 7.5), dot(200, 51, 50)]).toggles).toBe(0); // first tap moved 7.5 px
+		expect(replay([dot(0, 50, 50), dot(200, 70, 50)]).toggles).toBe(0); // 20 px apart
+		expect(replay([dot(0, 50, 50), dot(420, 51, 50)]).toggles).toBe(0); // 370 ms gap
 	});
 });

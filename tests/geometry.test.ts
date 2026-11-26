@@ -126,6 +126,16 @@ describe("strokeToPath", () => {
 		expect(isCenterline(hl)).toBe(false);
 		expect(isCenterline(pen)).toBe(false);
 		expect(isCenterline({ tool: "highlighter", style: "ball" })).toBe(false);
+		expect(isCenterline({ tool: "pen", style: "pencil" })).toBe(false);
+	});
+
+	it("tilted ballpoint strokes become variable-width filled outlines while dashed stays centerline", () => {
+		const tilts = line.map((_, i) => (i > 4 ? 0.8 : 0.1));
+		expect(isCenterline({ ...ball, tilts })).toBe(false);
+		expect(isCenterline({ ...ball, style: "dashed", tilts })).toBe(true);
+		const tiltedPath = strokeToPath({ ...ball, tilts });
+		expect(tiltedPath.endsWith("Z")).toBe(true);
+		expect(tiltedPath).not.toBe(strokeToPath(ball));
 	});
 });
 

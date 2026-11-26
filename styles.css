@@ -364,6 +364,12 @@
 		0 0 0 4px var(--interactive-accent);
 }
 
+.pencil-layer-toolbar .pl-palette-colors {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
 /* ---------- Popovers: ⋯ and tool settings (placed by the script, toward the roomier side) ---------- */
 
 .pencil-layer-toolbar .pl-popover {

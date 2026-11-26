@@ -8,6 +8,7 @@
 import { getStroke } from "perfect-freehand";
 import { penStyleOf } from "./model";
 import type { Point, Stroke } from "./model";
+import { tiltWidthMultiplier } from "./penInput";
 import { DASH_MIN_DISTANCE, curvePath, fmt, polylinePath, thinPoints } from "./smoothing";
 
 export interface PathOptions {
@@ -19,7 +20,7 @@ export interface PathOptions {
 	last?: boolean;
 }
 
-type StrokeShape = Pick<Stroke, "tool" | "size" | "points" | "style"> & { shape?: Stroke["shape"] };
+type StrokeShape = Pick<Stroke, "tool" | "size" | "points" | "style"> & { shape?: Stroke["shape"]; tilts?: Stroke["tilts"] };
 
 /** Turn a perfect-freehand outline polygon into a smooth closed SVG path (quadratic midpoints). */
 export function outlineToPath(outline: number[][]): string {
@@ -41,9 +42,11 @@ export function outlineToPath(outline: number[][]): string {
  * Is this stroke drawn as a stroked centerline (ballpoint / dashed pen) rather than a filled
  * perfect-freehand outline (Notes-style pen, highlighter)?
  */
-export function isCenterline(stroke: Pick<Stroke, "tool" | "style">): boolean {
+export function isCenterline(stroke: Pick<Stroke, "tool" | "style" | "tilts">): boolean {
 	const style = penStyleOf(stroke);
-	return style === "ball" || style === "dashed" || style === "dotted";
+	if (style === "dashed" || style === "dotted") return true;
+	if (style !== "ball") return false;
+	return !(stroke.tilts && stroke.tilts.some((t) => tiltWidthMultiplier(t, "ball", stroke.tool) > 1.01));
 }
 
 /** Is this a dashed pen stroke? (Legacy "dotted" strokes render dashed too.) */
@@ -105,6 +108,46 @@ export function strokeToPath(stroke: StrokeShape, opts: PathOptions = {}): strin
 	const { offsetX = 0, offsetY = 0, last = true } = opts;
 	if (stroke.points.length === 0) return "";
 	if (isCenterline(stroke)) return centerlinePath(stroke, offsetX, offsetY);
+	const style = penStyleOf(stroke);
+	const tilts = stroke.tilts;
+	const hasTilt =
+		!stroke.shape &&
+		!!tilts &&
+		tilts.length > 0 &&
+		tilts.some((t) => tiltWidthMultiplier(t, style, stroke.tool) > 1.01);
+
+	if (hasTilt) {
+		const usePressure = stroke.tool === "pen" && (style === "notes" || style === "pencil");
+		const uniform = constantPressure(stroke.points);
+		const thinning = 0.88;
+		const factors = stroke.points.map((p, i) => {
+			const pFactor = usePressure && !uniform ? 1 + 0.6 * (2 * p[2] - 1) : 1;
+			const tFactor = tiltWidthMultiplier(tilts[i] ?? 0, style, stroke.tool);
+			return pFactor * tFactor;
+		});
+		let maxFactor = 1;
+		for (const f of factors) if (f > maxFactor) maxFactor = f;
+		const effSize = (stroke.size * maxFactor) / (1 + thinning);
+		const pts = stroke.points.map((p, i) => {
+			const norm = (factors[i] / maxFactor) * (1 + thinning);
+			const effP = Math.max(0, Math.min(1, 0.5 + (norm - 1) / (2 * thinning)));
+			return [p[0] + offsetX, p[1] + offsetY, effP];
+		});
+		const taper = usePressure ? stroke.size * (style === "pencil" ? 2 : 4) : false;
+		return outlineToPath(
+			getStroke(pts, {
+				size: effSize,
+				thinning,
+				smoothing: 0.5,
+				streamline: 0.35,
+				simulatePressure: false,
+				last,
+				start: { cap: true, ...(taper ? { taper } : {}) },
+				end: { cap: true, ...(taper ? { taper } : {}) },
+			}),
+		);
+	}
+
 	const pts = stroke.points.map((p) => [p[0] + offsetX, p[1] + offsetY, p[2]]);
 	if (stroke.tool === "highlighter") {
 		return outlineToPath(
@@ -117,6 +160,20 @@ export function strokeToPath(stroke: StrokeShape, opts: PathOptions = {}): strin
 				last,
 				start: { cap: true },
 				end: { cap: true },
+			}),
+		);
+	}
+	if (style === "pencil") {
+		return outlineToPath(
+			getStroke(pts, {
+				size: stroke.size,
+				thinning: 0.55,
+				smoothing: 0.5,
+				streamline: 0.35,
+				simulatePressure: constantPressure(stroke.points),
+				last,
+				start: { cap: true, taper: stroke.size * 2 },
+				end: { cap: true, taper: stroke.size * 2 },
 			}),
 		);
 	}

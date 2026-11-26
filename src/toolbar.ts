@@ -73,8 +73,6 @@ export interface ToolbarHost {
 	redoInk(view: MarkdownView): void;
 	canUndoInk(view: MarkdownView): boolean;
 	canRedoInk(view: MarkdownView): boolean;
-	/** [Stage K] a drawing space below the cursor's line. */
-	addSpace(view: MarkdownView): void;
 	/** Show the desktop-only "Mouse draws" toggle. */
 	readonly showMouseToggle: boolean;
 	// [Stage F] slim desktop toolbar + Select tool
@@ -117,7 +115,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const STRIP_SCROLL_MOVE = 8;
 
 type OptionsKind = "pen" | "highlighter" | "eraser" | "lasso";
-type PopoverKind = "more" | ActiveTool | "select" | "snap" | "geometry";
+type PopoverKind = "more" | ActiveTool | "select" | "snap" | "geometry" | "palette";
 
 const SHAPE_ROWS: [DrawShape, string][][] = [
 	[["freehand", "Freehand"], ["line", "Line"], ["arrow", "Arrow"]],
@@ -290,7 +288,7 @@ export class InkToolbar {
 		this.eyeBtn.toggleClass("is-active", !s.inkVisible);
 		// A tool popover belongs to the active tool.
 		const k = this.popoverKind;
-		if (k && k !== "more" && k !== "select" && k !== "snap" && k !== "geometry" && (slim || k !== s.tool)) {
+		if (k && k !== "more" && k !== "select" && k !== "snap" && k !== "geometry" && k !== "palette" && (slim || k !== s.tool)) {
 			this.closePopover();
 		}
 		this.geometryBtn.toggleClass("is-active", s.setSquare || s.compass || (s.tool === "pen" && s.penShape !== "freehand"));
@@ -690,12 +688,21 @@ export class InkToolbar {
 		this.el.ownerDocument.addEventListener("pointerdown", this.onOutside, true);
 	}
 
+	/** Toggle the quick Apple Pencil tool palette popover (also triggered by bridged Squeeze). */
+	togglePalette(): void {
+		if (!this.host.getSettings().toolbarVisible) this.host.updateSettings({ toolbarVisible: true });
+		if (this.host.isSlim()) return;
+		const anchor = this.toolBtns.get(this.host.getSettings().tool) ?? this.moreBtn;
+		this.togglePopover("palette", anchor);
+	}
+
 	private popoverAnchor(): HTMLElement | null {
 		const k = this.popoverKind;
 		if (!k) return null;
 		if (k === "select") return this.selectBtn; // [Stage F]
 		if (k === "snap") return this.grip; // [Stage M]
 		if (k === "geometry") return this.geometryBtn;
+		if (k === "palette") return this.toolBtns.get(this.host.getSettings().tool) ?? this.moreBtn;
 		return k === "more" ? this.moreBtn : (this.toolBtns.get(k) ?? null);
 	}
 
@@ -772,7 +779,6 @@ export class InkToolbar {
 				}
 				break;
 			case "more":
-				this.menuItem(el, "square-dashed", "Add drawing space", false, () => this.host.addSpace(this.view));
 				this.menuItem(el, s.inkVisible ? "eye-off" : "eye", s.inkVisible ? "Hide ink" : "Show ink", false, () =>
 					set({ inkVisible: !s.inkVisible }),
 				);
@@ -817,6 +823,18 @@ export class InkToolbar {
 				this.toggle(el, "Erase highlighter only", s.eraseHighlighterOnly, () => set({ eraseHighlighterOnly: !s.eraseHighlighterOnly }));
 				this.subtitle(el, "Switch to the eraser by");
 				this.toggle(el, "Double-tap with the Pencil tip", s.doubleTapEraser, () => set({ doubleTapEraser: !s.doubleTapEraser }));
+				if (s.doubleTapEraser) {
+					this.segmented(
+						el,
+						[
+							{ label: "Eraser", active: s.doubleTapAction === "eraser", run: () => set({ doubleTapAction: "eraser" }) },
+							{ label: "Previous", active: s.doubleTapAction === "previous-tool", run: () => set({ doubleTapAction: "previous-tool" }) },
+							{ label: "Palette", active: s.doubleTapAction === "palette", run: () => set({ doubleTapAction: "palette" }) },
+							{ label: "Undo", active: s.doubleTapAction === "undo", run: () => set({ doubleTapAction: "undo" }) },
+						],
+						"Double-tap action",
+					);
+				}
 				this.toggle(el, "Scribbling over ink", s.scribbleErase, () => set({ scribbleErase: !s.scribbleErase }));
 				break;
 			case "geometry":
@@ -848,10 +866,12 @@ export class InkToolbar {
 					el,
 					[
 						{ label: "Ballpoint", active: s.penFeel === "ball", run: () => set({ penFeel: "ball" }) },
-						{ label: "Fountain pen", active: s.penFeel === "notes", run: () => set({ penFeel: "notes" }) },
+						{ label: "Fountain", active: s.penFeel === "notes", run: () => set({ penFeel: "notes" }) },
+						{ label: "Pencil", active: s.penFeel === "pencil", run: () => set({ penFeel: "pencil" }) },
 					],
 					"Feel",
 				);
+				this.toggle(el, "Tilt shading (Neigung)", s.tiltShading, () => set({ tiltShading: !s.tiltShading }));
 				this.segmented(
 					el,
 					SMOOTHING_LEVELS.map((l) => ({ label: SMOOTHING_LABELS[l], active: s.smoothing === l, run: () => set({ smoothing: l }) })),
@@ -913,6 +933,35 @@ export class InkToolbar {
 					{ label: "Highlighter", active: s.lassoFilter === "highlighter", run: () => set({ lassoFilter: "highlighter" }) },
 				]);
 				break;
+			case "palette": {
+				this.title(el, "Quick palette");
+				this.segmented(
+					el,
+					[
+						{ label: "Pen", active: s.tool === "pen", run: () => set({ tool: "pen" }) },
+						{ label: "Eraser", active: s.tool === "eraser", run: () => set({ tool: "eraser" }) },
+						{ label: "Highlight", active: s.tool === "highlighter", run: () => set({ tool: "highlighter" }) },
+						{ label: "Lasso", active: s.tool === "lasso", run: () => set({ tool: "lasso" }) },
+					],
+					"Tool",
+				);
+				if (s.tool === "pen") {
+					this.segmented(
+						el,
+						[
+							{ label: "Ballpoint", active: s.penFeel === "ball", run: () => set({ penFeel: "ball" }) },
+							{ label: "Fountain", active: s.penFeel === "notes", run: () => set({ penFeel: "notes" }) },
+							{ label: "Pencil", active: s.penFeel === "pencil", run: () => set({ penFeel: "pencil" }) },
+						],
+						"Feel",
+					);
+					this.renderPaletteSwatches(el, PEN_COLORS, s.penColor, (c) => set({ penColor: c }));
+				} else if (s.tool === "highlighter") {
+					this.renderPaletteSwatches(el, HIGHLIGHTER_COLORS, s.highlighterColor, (c) => set({ highlighterColor: c }));
+				}
+				this.menuItem(el, "undo-2", "Undo ink", false, () => this.host.undoInk(this.view));
+				break;
+			}
 		}
 		if (hosted) {
 			// Right below the title: presets/widths + colors first, as on the expanded bar.
@@ -934,6 +983,18 @@ export class InkToolbar {
 
 	private subtitle(parent: HTMLElement, text: string): void {
 		parent.createDiv({ cls: "pl-pop-subtitle", text });
+	}
+
+	private renderPaletteSwatches(parent: HTMLElement, colors: readonly PaletteColor[], current: string, select: (c: string) => void): void {
+		const row = parent.createDiv({ cls: "pl-pop-row" });
+		row.createDiv({ cls: "pl-pop-label", text: "Color" });
+		const grid = row.createDiv({ cls: "pl-palette-colors" });
+		for (const c of colors) {
+			const b = this.button(grid, null, c.label, () => select(c.value));
+			b.addClass("pl-color");
+			b.toggleClass("is-active", c.value === current);
+			b.createSpan({ cls: "pl-color-dot" }).style.background = cssColor(c.value);
+		}
 	}
 
 	/** A row of mutually exclusive choices (GoodNotes-style segmented control). */

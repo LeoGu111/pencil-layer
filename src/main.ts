@@ -2,7 +2,7 @@ import { VaultInkAdapter, ensureFolder } from "./vaultAdapter";
 import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile, TFolder, Vault, normalizePath } from "obsidian";
 import { InkStore } from "./store";
 import { PencilLayerApi, createApi } from "./api";
-import { InkHost, InkView, SpaceClip, inkExtension } from "./inkView";
+import { InkHost, InkView, inkExtension } from "./inkView";
 import { InkToolbar, ToolbarHost } from "./toolbar";
 import type { InkClip } from "./clipboard";
 import { ScreenshotModal, ScreenshotSource } from "./screenshot";
@@ -12,6 +12,7 @@ import { InkKeys } from "./inkKeys"; // [Stage F]
 import { PdfExporter } from "./exportPdf"; // [Stage H]
 import type { ExportChoice, ExportOptions } from "./exportOnce";
 import { DocFont, ExportStyle, styleExportLabel } from "./docStyle";
+import { PENCIL_GESTURE_ACTIONS, PencilGestureAction, PencilGestureDetail, resolvePencilAction, resolvePencilGesture } from "./pencilGestures";
 import {
 	ActiveTool,
 	DEFAULT_PEN_WIDTHS,
@@ -54,8 +55,6 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 	readonly showMouseToggle = !Platform.isMobile;
 	/** Lasso Copy/Cut clipboard: plugin-internal, shared by all notes, session only. */
 	clipboard: InkClip | null = null;
-	/** Copied/cut drawing space: plugin-internal, shared by all notes, session only. */
-	spaceClip: SpaceClip | null = null;
 	/** Tool "Toggle eraser" / Pencil double-tap returns to (session only). */
 	private previousTool: ActiveTool | null = null;
 
@@ -75,14 +74,17 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 		const raw: unknown = current ?? await this.loadPreviousSettings();
 		const rawLocal = this.loadLocal();
 		this.settings = { ...sanitizeSynced(raw), ...sanitizeLocal(rawLocal, Platform.isMobile) };
-		if (raw == null && Platform.isIosApp) this.settings.doubleTapEraser = true;
+		const prevVersion = raw && typeof raw === "object" ? (raw as { settingsVersion?: unknown }).settingsVersion : undefined;
+		if (Platform.isIosApp && (raw == null || (typeof prevVersion === "number" ? prevVersion < SETTINGS_VERSION : true))) {
+			this.settings.doubleTapEraser = true;
+		}
 		// [Stage F] pre-F device settings: the desktop toolbar (now the slim Select bar) is shown — persist once.
 		if (current == null || needsLocalMigration(rawLocal)) this.saveLocal();
 		// M1 kept per-device and size keys in data.json (synced to every device): drop them once.
 		// Stage A's "dotted" preset is "dashed" since A2: rewrite once.
 		const r = raw as { penPreset?: unknown; penWidths?: Record<string, unknown> } | null;
 		const legacyDotted = !!r && typeof r === "object" && (r.penPreset === "dotted" || (!!r.penWidths && "dotted" in r.penWidths));
-		// Pre-Stage-E files are migrated once (double-tap off, 0.5 s hold delay): persist that.
+		// Older settings schemas are migrated once and persisted.
 		const oldVersion = !!r && typeof r === "object" && (r as { settingsVersion?: unknown }).settingsVersion !== SETTINGS_VERSION;
 		if (current == null || (raw && typeof raw === "object" && (legacyDotted || oldVersion || LEGACY_KEYS.some((k) => k in raw)))) {
 			await this.saveData(syncedOnly(this.settings));
@@ -122,6 +124,25 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 			this.inkKeys = new InkKeys(this.app, this);
 			this.register(() => this.inkKeys?.destroy());
 			this.registerDomEvent(window, "keydown", this.inkKeys.onKeyDown, { capture: true });
+		}
+
+		// Native iPadOS Pencil gestures if forwarded by the host / a WKWebView bridge.
+		const onNativePencil = (ev: Event) => {
+			const detail = (ev as CustomEvent<Partial<PencilGestureDetail> & { type?: string }>).detail;
+			const kind = detail?.kind ?? (detail?.type === "double-tap" ? "doubleTap" : detail?.type === "squeeze" ? "squeeze" : undefined);
+			if (kind !== "doubleTap" && kind !== "squeeze") return;
+			this.applyPencilResolution(
+				resolvePencilGesture(
+					{ kind, preferredAction: detail?.preferredAction, platform: detail?.platform ?? "ios" },
+					this.settings.doubleTapAction,
+					this.settings.squeezeAction,
+					this.settings.tool,
+					this.previousTool,
+				),
+			);
+		};
+		for (const name of ["pdf-notes-pencil-gesture", "obsidian-pencil-gesture", "applePencilGesture"] as const) {
+			this.registerDomEvent(window, name as keyof WindowEventMap, onNativePencil);
 		}
 	}
 
@@ -169,6 +190,25 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 	/** Pencil double-tap / "Toggle eraser" command: current tool ↔ eraser. */
 	toggleEraser(): void {
 		this.updateSettings({ tool: toggleEraser(this.settings.tool, this.previousTool) });
+	}
+
+	/** Run a configured Pencil gesture action (tip double-tap or bridged hardware gesture). */
+	runPencilGestureAction(action: PencilGestureAction): void {
+		this.applyPencilResolution(resolvePencilAction(action, undefined, this.settings.tool, this.previousTool));
+	}
+
+	private applyPencilResolution(res: { tool?: ActiveTool; palette?: boolean; undo?: boolean }): void {
+		if (res.tool) this.updateSettings({ tool: res.tool });
+		if (res.undo) {
+			const v = this.activeMarkdownView();
+			if (v) this.undoInk(v);
+		}
+		if (res.palette) this.togglePalette();
+	}
+
+	private togglePalette(): void {
+		const v = this.activeMarkdownView();
+		if (v) this.toolbars.get(v)?.togglePalette();
 	}
 
 	private loadLocal(): unknown {
@@ -381,41 +421,10 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 		if (view.file) this.store.redo(view.file.path);
 	}
 
-	// [Stage K] drawing spaces
-	/** The ink view showing this Markdown view's editor. */
 	private inkViewOf(view: MarkdownView): InkView | null {
 		const cm = (view.editor as { cm?: unknown }).cm;
 		for (const v of this.inkViews) if (v.view === cm) return v;
 		return null;
-	}
-
-	/** [Stage K] Ask before deleting a drawing space that has ink in it. */
-	confirmDeleteSpace(strokes: number): Promise<boolean> {
-		return new Promise((resolve) => {
-			const m = new Modal(this.app);
-			let done = false;
-			const finish = (v: boolean) => {
-				if (done) return;
-				done = true;
-				resolve(v);
-				m.close();
-			};
-			m.titleEl.setText("Delete drawing space?");
-			m.contentEl.createEl("p", { text: `This space has ${strokes} ink stroke${strokes === 1 ? "" : "s"}. Delete the space and its ink? (Undo brings it back.)` });
-			const row = m.contentEl.createDiv({ cls: "modal-button-container" });
-			const rm = row.createEl("button", { text: "Delete space", cls: "mod-warning" });
-			const cancel = row.createEl("button", { text: "Cancel" });
-			rm.addEventListener("click", () => finish(true));
-			cancel.addEventListener("click", () => finish(false));
-			m.onClose = () => finish(false);
-			m.open();
-		});
-	}
-
-	/** [Stage K] A drawing space below the cursor's line (no text inserted; cursor and focus unchanged). */
-	addSpace(view: MarkdownView): void {
-		if (view.getMode() !== "source") return;
-		this.inkViewOf(view)?.addSpace();
 	}
 
 	private activeMarkdownView(): MarkdownView | null {
@@ -443,17 +452,6 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 			});
 		viewCommand("undo-ink", "Undo ink", (v) => this.undoInk(v));
 		viewCommand("redo-ink", "Redo ink", (v) => this.redoInk(v));
-		viewCommand("add-space", "Add drawing space below cursor line", (v) => this.addSpace(v));
-		this.addCommand({
-			id: "paste-space",
-			name: "Paste drawing below cursor line",
-			checkCallback: (checking) => {
-				const v = this.activeMarkdownView();
-				if (!v || v.getMode() !== "source" || !this.spaceClip) return false;
-				if (!checking) this.inkViewOf(v)?.pasteSpace();
-				return true;
-			},
-		});
 		this.addCommand({ id: "select-pen", name: "Select pen", callback: () => this.updateSettings({ tool: "pen" }) });
 		this.addCommand({
 			id: "select-highlighter",
@@ -466,6 +464,16 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 			id: "toggle-eraser",
 			name: "Toggle eraser",
 			callback: () => this.toggleEraser(),
+		});
+		this.addCommand({
+			id: "switch-previous-tool",
+			name: "Switch to previous tool",
+			callback: () => this.runPencilGestureAction("previous-tool"),
+		});
+		this.addCommand({
+			id: "toggle-pencil-palette",
+			name: "Toggle quick tool palette",
+			callback: () => this.togglePalette(),
 		});
 		// [Stage H] one-shot: they apply to that export only ("Include ink in PDF export" stays as set).
 		const exportCmd = (id: string, name: string, choice: ExportChoice) =>
@@ -635,10 +643,6 @@ class PencilSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Show ink")
 			.addToggle((t) => t.setValue(s.inkVisible).onChange((v) => this.plugin.updateSettings({ inkVisible: v })));
-		new Setting(containerEl)
-			.setName("A4 drawing spaces")
-			.setDesc("New spaces have the printable height of one portrait A4 page at 100% scale. Existing drawings keep their size.")
-			.addToggle((t) => t.setValue(s.a4DrawingSpaces).onChange((v) => this.plugin.updateSettings({ a4DrawingSpaces: v })));
 		// [Stage D]
 		new Setting(containerEl)
 			.setName("Include ink in PDF export (this device)")
@@ -678,14 +682,19 @@ class PencilSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("Pen").setHeading();
 		new Setting(containerEl)
 			.setName("Pen feel")
-			.setDesc("Ballpoint: constant width. Fountain pen: pressure and speed vary the width, soft tapered ends. Applies to Thin and Thick; Dashed is always ballpoint.")
+			.setDesc("Ballpoint: constant width. Fountain pen: pressure and speed vary the width, soft tapered ends. Pencil: soft graphite shading that responds strongly to tilt. Dashed is always ballpoint.")
 			.addDropdown((d) =>
 				d
 					.addOption("ball", "Ballpoint")
 					.addOption("notes", "Fountain pen")
+					.addOption("pencil", "Pencil")
 					.setValue(s.penFeel)
 					.onChange((v) => this.plugin.updateSettings({ penFeel: v as PenFeel })),
 			);
+		new Setting(containerEl)
+			.setName("Tilt shading (Neigung)")
+			.setDesc("Tilting the Apple Pencil widens strokes for shading (works with Ballpoint, Fountain pen, Pencil, and Highlighter).")
+			.addToggle((t) => t.setValue(s.tiltShading).onChange((v) => this.plugin.updateSettings({ tiltShading: v })));
 		new Setting(containerEl)
 			.setName("Smoothing")
 			.setDesc("Filters pen jitter and pixel steps while you write (strong when slow, almost no lag when fast). Lines are always drawn as smooth curves. Shapes are never smoothed.")
@@ -738,9 +747,25 @@ class PencilSettingTab extends PluginSettingTab {
 				});
 			});
 		new Setting(containerEl)
-			.setName("Double-tap with the Pencil tip to switch tools")
-			.setDesc("Tap the screen twice with the Pencil tip to switch between the current tool and the eraser. The taps leave no dots. Taps beside recent handwriting do not switch tools.")
+			.setName("Double-tap with the Pencil tip")
+			.setDesc("Tap the screen twice quickly with the Pencil tip to run the double-tap action below. Taps leave no dots, and taps beside recent handwriting are ignored.")
 			.addToggle((t) => t.setValue(s.doubleTapEraser).onChange((v) => this.plugin.updateSettings({ doubleTapEraser: v })));
+		new Setting(containerEl)
+			.setName("Double-tap action")
+			.setDesc("Action triggered by Pencil tip double-tap (and bridged barrel double-tap if provided by the host).")
+			.addDropdown((d) => {
+				for (const a of PENCIL_GESTURE_ACTIONS) {
+					if (a.value !== "system" && a.value !== "none") d.addOption(a.value, a.label);
+				}
+				return d.setValue(s.doubleTapAction).onChange((v) => this.plugin.updateSettings({ doubleTapAction: v as PencilGestureAction }));
+			});
+		new Setting(containerEl)
+			.setName("Apple Pencil Pro squeeze action")
+			.setDesc("Action when a squeeze event is forwarded to the WebView. Note: Obsidian's iPad app does not expose native iPadOS UIPencilInteraction barrel squeeze/double-tap events to plugins; you can also trigger the Quick Tool Palette via command or iPadOS Shortcuts.")
+			.addDropdown((d) => {
+				for (const a of PENCIL_GESTURE_ACTIONS) d.addOption(a.value, a.label);
+				return d.setValue(s.squeezeAction).onChange((v) => this.plugin.updateSettings({ squeezeAction: v as PencilGestureAction }));
+			});
 		new Setting(containerEl)
 			.setName("Scribble to erase")
 			.setDesc("Scribble quickly back and forth over strokes to erase them. Conservative: only strokes the scribble covers almost completely are erased — outlines around shading and lines running through (graph axes) are kept. If nothing qualifies, the scribble stays as ink.")

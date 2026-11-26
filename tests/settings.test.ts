@@ -254,7 +254,7 @@ describe("Stage B settings", () => {
 
 	it("migrates pre-Stage-E data.json once: double-tap off, 450 ms default → 500 ms", () => {
 		const old = sanitizeSynced({ doubleTapEraser: true, shapeHoldMs: 450 });
-		expect(old).toMatchObject({ doubleTapEraser: false, shapeHoldMs: 500, settingsVersion: 2 });
+		expect(old).toMatchObject({ doubleTapEraser: false, shapeHoldMs: 500, settingsVersion: 3 });
 		// A custom hold delay is kept.
 		expect(sanitizeSynced({ shapeHoldMs: 700 }).shapeHoldMs).toBe(700);
 		// Version 2 files keep what the user chose.
@@ -338,5 +338,43 @@ describe("penDevice (desktop pen detected)", () => {
 		expect(sanitizeLocal({ penDevice: true }, false).penDevice).toBe(true);
 		expect(sanitizeLocal({ penDevice: true }, true).penDevice).toBe(false);
 		expect(Object.keys(splitPatch({ penDevice: true }).local)).toEqual(["penDevice"]);
+	});
+});
+
+describe("Apple Pencil feel, tilt & gestures settings", () => {
+	it("supports pencil feel, tiltShading, doubleTapAction, and squeezeAction", () => {
+		const d = sanitizeSynced(null);
+		expect(d.settingsVersion).toBe(3);
+		expect(d.tiltShading).toBe(true);
+		expect(d.doubleTapAction).toBe("eraser");
+		expect(d.squeezeAction).toBe("palette");
+
+		const custom = sanitizeSynced({
+			settingsVersion: 3,
+			penFeel: "pencil",
+			tiltShading: false,
+			doubleTapAction: "previous-tool",
+			squeezeAction: "undo",
+		});
+		expect(custom).toMatchObject({
+			settingsVersion: 3,
+			penFeel: "pencil",
+			tiltShading: false,
+			doubleTapAction: "previous-tool",
+			squeezeAction: "undo",
+		});
+
+		const invalid = sanitizeSynced({
+			penFeel: "crayon",
+			tiltShading: "yes",
+			doubleTapAction: "fly",
+			squeezeAction: 42,
+		});
+		expect(invalid).toMatchObject({
+			penFeel: "ball",
+			tiltShading: true,
+			doubleTapAction: "eraser",
+			squeezeAction: "palette",
+		});
 	});
 });

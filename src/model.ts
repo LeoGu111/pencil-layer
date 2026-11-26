@@ -13,8 +13,8 @@ export type Tool = "pen" | "highlighter";
  * - "notes":  Apple Notes-style — pressure/velocity-sensitive outline via perfect-freehand.
  * Strokes saved before M2 have no style and load as "ball".
  */
-export type PenStyle = "ball" | "dashed" | "dotted" | "notes";
-export const PEN_STYLES: readonly PenStyle[] = ["ball", "dashed", "dotted", "notes"];
+export type PenStyle = "ball" | "dashed" | "dotted" | "notes" | "pencil";
+export const PEN_STYLES: readonly PenStyle[] = ["ball", "dashed", "dotted", "notes", "pencil"];
 
 /**
  * Kind of a snapped shape (M2 Stage B "draw and hold"). Shapes are ordinary strokes whose points
@@ -101,6 +101,8 @@ export interface Stroke {
 	style?: PenStyle;
 	anchor: Anchor;
 	points: Point[];
+	/** Optional normalized stylus tilt [0..1] parallel to `points` (omitted when upright). */
+	tilts?: number[];
 	/** Set when the stroke was snapped to a clean shape (draw-and-hold). Absent for freehand ink. */
 	shape?: ShapeKind;
 	/**
@@ -350,6 +352,27 @@ function decodeXY(xy: readonly unknown[], pr: unknown): Point[] {
 	return out;
 }
 
+/** Decode a delta-encoded hundredths channel (such as tilt `t`), aligned to `count` points. */
+function decodeChannel(raw: unknown, count: number, fallback: number): number[] | null {
+	if (!Array.isArray(raw) || raw.length === 0 || count <= 0) return null;
+	const out: number[] = [];
+	let acc = 0;
+	let ok = true;
+	let anyPositive = false;
+	for (let i = 0; i < count; i++) {
+		if (ok && isNum(raw[i])) {
+			acc += Math.round(raw[i] as number);
+			const v = clamp01(acc / P_SCALE);
+			if (v > 0) anyPositive = true;
+			out.push(v);
+		} else {
+			ok = false;
+			out.push(fallback);
+		}
+	}
+	return anyPositive ? out : null;
+}
+
 const isIndex = (v: unknown): v is number => isNum(v) && v >= 0 && Math.floor(v) === v;
 
 /** A valid Stage C text anchor, or null (the stroke then loads as a freehand highlighter). */
@@ -402,6 +425,8 @@ export function parseStroke(raw: unknown): Stroke | null {
 	// Pre-M2 strokes (and unknown styles from newer versions) render as ballpoint.
 	if (tool === "pen") stroke.style = PEN_STYLES.includes(r.style as PenStyle) ? (r.style as PenStyle) : "ball";
 	if (SHAPE_KINDS.includes(r.shape as ShapeKind)) stroke.shape = r.shape as ShapeKind;
+	const tilts = !stroke.shape ? decodeChannel(r.t, points.length, 0) : null;
+	if (tilts) stroke.tilts = tilts;
 	if (tool === "highlighter") {
 		const text = parseTextAnchor(r.text, anchor.line);
 		if (text) stroke.text = text;
@@ -539,6 +564,8 @@ export interface DiskStroke {
 	xy: number[];
 	/** Pressure in hundredths, first absolute then deltas. Only on notes-style freehand strokes with real pressure. */
 	p?: number[];
+	/** Stylus tilt in hundredths [0..100], first absolute then deltas. Omitted when upright. */
+	t?: number[];
 	shape?: ShapeKind;
 	/** Stage C text highlight anchor (highlighters only). */
 	text?: TextAnchor;
@@ -563,9 +590,15 @@ export interface DiskInkFile {
  * pressure is uniformly 0.5 (mouse input) reloads identically without it.
  */
 function keepsPressure(s: Stroke): boolean {
-	if (penStyleOf(s) !== "notes" || s.shape) return false;
+	const style = penStyleOf(s);
+	if ((style !== "notes" && style !== "pencil") || s.shape) return false;
 	const def = quant(DEFAULT_PRESSURE, P_SCALE);
 	return s.points.some((p) => quant(clamp01(p[2]), P_SCALE) !== def);
+}
+
+function keepsTilt(s: Stroke): boolean {
+	if (s.shape || !s.tilts || s.tilts.length === 0) return false;
+	return s.tilts.some((v) => quant(clamp01(v), P_SCALE) > 0);
 }
 
 /** Delta-encode quantized values (`out[0]` absolute, then differences of the QUANTIZED values: no drift). */
@@ -612,6 +645,15 @@ export function serializeStroke(s: Stroke): DiskStroke {
 		let pp = 0;
 		for (const pt of s.points) pp = pushDeltas(p, quant(clamp01(pt[2]), P_SCALE), pp);
 	}
+	let t: number[] | undefined;
+	if (keepsTilt(s)) {
+		t = [];
+		let ptAcc = 0;
+		for (let i = 0; i < s.points.length; i++) {
+			const v = s.tilts?.[i] ?? 0;
+			ptAcc = pushDeltas(t, quant(clamp01(v), P_SCALE), ptAcc);
+		}
+	}
 	return {
 		id: s.id,
 		tool: s.tool,
@@ -621,6 +663,7 @@ export function serializeStroke(s: Stroke): DiskStroke {
 		anchor: { line: s.anchor.line, hash: s.anchor.hash },
 		xy,
 		...(p ? { p } : {}),
+		...(t ? { t } : {}),
 		...(s.shape ? { shape: s.shape } : {}),
 		...(s.text && s.tool === "highlighter" ? { text: { ch: s.text.ch, endLine: s.text.endLine, endCh: s.text.endCh } } : {}),
 		...(s.char && !(s.text && s.tool === "highlighter")
@@ -645,7 +688,7 @@ function strokeKey(s: Stroke): string {
 	// Stage H: a character anchor's `line`/`ch` move with text edits (like the anchor) and don't
 	// count; whether there is one and its offsets do (a device without Stage H drops it).
 	const char = d.char ? [d.char.dx, d.char.dy] : null;
-	return JSON.stringify([d.tool, d.color, d.size, d.style ?? null, d.shape ?? null, d.xy, d.p ?? null, d.text ? 1 : 0, char, d.space ?? null]);
+	return JSON.stringify([d.tool, d.color, d.size, d.style ?? null, d.shape ?? null, d.xy, d.p ?? null, d.t ?? null, d.text ? 1 : 0, char, d.space ?? null]);
 }
 
 /**

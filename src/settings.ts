@@ -13,12 +13,13 @@ import type { PenStyle, Tool } from "./model";
 import { SMOOTHING_LEVELS, SmoothingLevel } from "./smoothing";
 import { DRAW_SHAPES, DrawShape, SNAP_HOLD_MS } from "./shapes";
 import { DOC_FONTS, DocFont, EXPORT_STYLES, ExportStyle } from "./docStyle";
+import { PencilGestureAction, sanitizePencilGestureAction } from "./pencilGestures";
 
 export type ActiveTool = Tool | "eraser" | "lasso";
 /** Pen presets. "dashed" was "dotted" before Stage A2 (migrated on load). */
 export type PenPreset = "thin" | "dashed" | "thick";
 export type HighlighterWidth = "normal" | "wide";
-export type PenFeel = "ball" | "notes";
+export type PenFeel = "ball" | "notes" | "pencil";
 /** Stage E eraser: "stroke" removes whole strokes, "precise" erases only the part touched. */
 export type EraserMode = "stroke" | "precise";
 export type EraserSize = "s" | "m" | "l";
@@ -46,14 +47,18 @@ export interface SyncedSettings {
 	/** On-screen widths in px of the three pen presets. */
 	penWidths: PenWidths;
 	inkVisible: boolean;
-	/** New drawing spaces have the fixed printable height of portrait A4. */
-	a4DrawingSpaces: boolean;
 	/** Draw and hold to snap to a shape (pen only). */
 	shapeSnap: boolean;
 	/** How long the pen must stay still before snapping (ms). */
 	shapeHoldMs: number;
-	/** Two quick Pencil-tip taps toggle the eraser. */
+	/** Stylus tilt expands stroke width for shading (Apple Pencil Neigung). */
+	tiltShading: boolean;
+	/** Two quick Pencil-tip taps trigger `doubleTapAction`. */
 	doubleTapEraser: boolean;
+	/** Action triggered by double-tapping with the Pencil (tip or bridged barrel double-tap). */
+	doubleTapAction: PencilGestureAction;
+	/** Action triggered by bridged Apple Pencil Pro squeeze (when host supports UIPencilInteraction). */
+	squeezeAction: PencilGestureAction;
 	/** Scribble over strokes to erase them (opt-in; conservative coverage rule). */
 	scribbleErase: boolean;
 	/** Input smoothing of freehand ink (One Euro filter strength; curves are always smooth). */
@@ -180,7 +185,7 @@ export const DEFAULT_HOLD_MS = SNAP_HOLD_MS;
 /** Hold-delay choices offered in the pen popover (ms). */
 export const HOLD_MS_CHOICES: readonly number[] = [300, 500, 800, 1200];
 /** Current settings schema version (see `SyncedSettings.settingsVersion`). */
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 
 /** Precise-eraser radius (px) per size. The stroke eraser always uses `STROKE_ERASER_RADIUS`. */
 export const ERASER_RADII: Readonly<Record<EraserSize, number>> = { s: 5, m: 10, l: 20 };
@@ -220,10 +225,12 @@ export const DEFAULT_SYNCED: Readonly<SyncedSettings> = {
 	penFeel: "ball",
 	penWidths: DEFAULT_PEN_WIDTHS,
 	inkVisible: true,
-	a4DrawingSpaces: false,
 	shapeSnap: true,
 	shapeHoldMs: DEFAULT_HOLD_MS,
+	tiltShading: true,
 	doubleTapEraser: false,
+	doubleTapAction: "eraser",
+	squeezeAction: "palette",
 	scribbleErase: false,
 	smoothing: "medium",
 	inkFolder: DEFAULT_INK_FOLDER,
@@ -268,7 +275,7 @@ export function defaultLocal(_isMobile: boolean): LocalSettings {
 const TOOLS: readonly ActiveTool[] = ["pen", "highlighter", "eraser", "lasso"];
 const PRESETS: readonly PenPreset[] = ["thin", "dashed", "thick"];
 const HL_WIDTHS: readonly HighlighterWidth[] = ["normal", "wide"];
-const FEELS: readonly PenFeel[] = ["ball", "notes"];
+const FEELS: readonly PenFeel[] = ["ball", "notes", "pencil"];
 const EDGES: readonly ToolbarEdge[] = ["top", "bottom", "left", "right"];
 const ERASER_MODES: readonly EraserMode[] = ["stroke", "precise"];
 const ERASER_SIZES: readonly EraserSize[] = ["s", "m", "l"];
@@ -338,10 +345,12 @@ export function sanitizeSynced(raw: unknown): SyncedSettings {
 			thick: sanitizeWidth(w.thick, DEFAULT_PEN_WIDTHS.thick),
 		},
 		inkVisible: typeof r.inkVisible === "boolean" ? r.inkVisible : DEFAULT_SYNCED.inkVisible,
-		a4DrawingSpaces: bool(r.a4DrawingSpaces, DEFAULT_SYNCED.a4DrawingSpaces),
 		shapeSnap: typeof r.shapeSnap === "boolean" ? r.shapeSnap : DEFAULT_SYNCED.shapeSnap,
 		shapeHoldMs: legacy && r.shapeHoldMs === 450 ? DEFAULT_HOLD_MS : sanitizeHoldMs(r.shapeHoldMs),
+		tiltShading: bool(r.tiltShading, DEFAULT_SYNCED.tiltShading),
 		doubleTapEraser: legacy ? false : bool(r.doubleTapEraser, DEFAULT_SYNCED.doubleTapEraser),
+		doubleTapAction: sanitizePencilGestureAction(r.doubleTapAction, DEFAULT_SYNCED.doubleTapAction),
+		squeezeAction: sanitizePencilGestureAction(r.squeezeAction, DEFAULT_SYNCED.squeezeAction),
 		scribbleErase: typeof r.scribbleErase === "boolean" ? r.scribbleErase : DEFAULT_SYNCED.scribbleErase,
 		smoothing: SMOOTHING_LEVELS.includes(r.smoothing as SmoothingLevel)
 			? (r.smoothing as SmoothingLevel)
@@ -448,7 +457,7 @@ export function strokeParams(s: SyncedSettings, tool: Tool): StrokeParams {
 	}
 	const size = s.penWidths[s.penPreset];
 	// Dashed is always ballpoint-rendered; the "pen feel" applies to Thin/Thick.
-	const style: PenStyle = s.penPreset === "dashed" ? "dashed" : s.penFeel === "notes" ? "notes" : "ball";
+	const style: PenStyle = s.penPreset === "dashed" ? "dashed" : s.penFeel;
 	return { tool, color: s.penColor, size, style };
 }
 
