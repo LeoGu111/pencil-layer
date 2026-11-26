@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Point, Stroke } from "../src/model";
-import { cleanVisionLatexResponse, formatLatexFormula, recognizeMathFromStrokes } from "../src/mathLatex";
+import { cleanVisionLatexResponse, formatLatexFormula, isBlockLatex, recognizeMathFromStrokes, stripLatexDelimiters } from "../src/mathLatex";
 
 let seq = 0;
 function mkStroke(pts: readonly [number, number][]): Stroke {
@@ -52,6 +52,10 @@ describe("mathLatex", () => {
 		expect(formatLatexFormula("x^2 + 1", "auto")).toBe("$x^2 + 1$");
 		expect(formatLatexFormula("\\frac{1}{2}", "auto")).toBe("$$\n\\frac{1}{2}\n$$");
 		expect(formatLatexFormula("\\frac{1}{2}", "inline")).toBe("$\\frac{1}{2}$");
+		expect(stripLatexDelimiters(" $$ x^2 $$ ")).toBe("x^2");
+		expect(isBlockLatex("x^2", "auto")).toBe(false);
+		expect(isBlockLatex("\\frac{1}{2}", "auto")).toBe(true);
+		expect(isBlockLatex("x^2", "block")).toBe(true);
 		expect(cleanVisionLatexResponse("```latex\n$$a^2 + b^2 = c^2$$\n```")).toBe("a^2 + b^2 = c^2");
 	});
 

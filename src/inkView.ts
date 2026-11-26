@@ -19,13 +19,15 @@
  */
 import { EditorView, PluginValue, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import type { Extension, Text } from "@codemirror/state";
-import { Notice, Platform, editorInfoField, setIcon, setTooltip } from "obsidian";
+import { Notice, Platform, editorInfoField, finishRenderMath, loadMathJax, renderMath, setIcon, setTooltip } from "obsidian";
 import { InkFile, PenStyle, Point, Stroke, Tool, hashLine, isEmptyInk, newId, resolveAnchor } from "./model";
 import { BBox, bbox, dashArray, hitTestStrokeSegment, isCenterline, isDashed, strokeToPath } from "./geometry";
-import { formatLatexFormula } from "./mathLatex";
+import { formatLatexFormula, isBlockLatex, stripLatexDelimiters } from "./mathLatex";
+import { MathInsertionLine, VerticalBand, planMathBarTop, planMathInsertion } from "./mathBar";
 import { recognizeMathStrokes, strokesToPngBase64 } from "./mathVision";
 import { buildPageGuideLayout, computeCanvasBottomPadding } from "./pageGuides";
-import { TapLineInfo, insertionPosForY, planTapToType } from "./tapToType";
+import { TapLineInfo, planTapToType } from "./tapToType";
+import { spaceLayout } from "./spaceView";
 import type { AssistantLaunchOptions } from "./aiAssistant";
 import {
 	PinchActivation,
@@ -478,6 +480,7 @@ export class InkView implements PluginValue {
 	private pinch: { activation: PinchActivation; startZoom: number; prevMid: { x: number; y: number }; lastZoom: number } | null = null;
 	/** Floating Formula preview/edit bar (keeps handwritten strokes safe until confirmed). */
 	private mathBarEl: HTMLElement | null = null;
+	private mathPreviewSeq = 0;
 	private pendingMath: { path: string; strokeIds: string[]; rawTex: string; midY: number; box: BBox } | null = null;
 
 	/** Lasso selection (strokes on the canvas) and the live drag transform. */
@@ -585,6 +588,7 @@ export class InkView implements PluginValue {
 		sd.addEventListener("touchend", this.onTouch, capActive);
 		sd.addEventListener("touchcancel", this.onTouch, capActive);
 		sd.addEventListener("wheel", this.onWheel, capActive);
+		sd.addEventListener("scroll", this.onScroll, { passive: true });
 		sd.addEventListener("click", this.onEditorClick);
 		for (const t of SUPPRESSED) sd.addEventListener(t, this.onCompatMouse, capActive);
 
@@ -649,6 +653,7 @@ export class InkView implements PluginValue {
 		sd.removeEventListener("touchend", this.onTouch, true);
 		sd.removeEventListener("touchcancel", this.onTouch, true);
 		sd.removeEventListener("wheel", this.onWheel, true);
+		sd.removeEventListener("scroll", this.onScroll);
 		sd.removeEventListener("click", this.onEditorClick);
 		for (const t of SUPPRESSED) sd.removeEventListener(t, this.onCompatMouse, true);
 		this.clearMathBuffer();
@@ -3533,16 +3538,54 @@ export class InkView implements PluginValue {
 		this.applyTapToType(e.clientX || tap.x, e.clientY || tap.y, e.target);
 	};
 
+	private textLineBounds(lineNumber: number): { top: number; bottom: number } {
+		const view = this.view;
+		const doc = view.state.doc;
+		const line = doc.line(lineNumber);
+		const sy = view.scaleY || 1;
+		const top = unzoomedLineTop(view, line.from);
+		const vp = view.viewport;
+		if (vp && line.from >= vp.from && line.from <= vp.to && typeof view.domAtPos === "function") {
+			try {
+				const { node } = view.domAtPos(line.from, 1);
+				const el = (node.nodeType === 1 ? (node as Element) : node.parentElement)?.closest?.(".cm-line");
+				if (el && view.contentDOM.contains(el)) {
+					const r = el.getBoundingClientRect();
+					if (r.height > 0 || r.width > 0) {
+						const o = overlayOrigin(view);
+						return { top: (r.top - o.y) / o.sy, bottom: (r.bottom - o.y) / o.sy };
+					}
+				}
+			} catch {
+				/* fall back to heightMap */
+			}
+		}
+		const block = view.lineBlockAt(line.from);
+		let height = (block.bottom - block.top) / sy;
+		if (Array.isArray(block.type)) {
+			const parts = block.type as readonly { top: number; bottom: number; widget?: unknown }[];
+			let textBottom = block.top;
+			for (const p of parts) {
+				if (!p.widget) textBottom = Math.max(textBottom, p.bottom);
+			}
+			if (textBottom > block.top) height = (textBottom - block.top) / sy;
+		}
+		return { top, bottom: top + height };
+	}
+
 	private lineInfoAt(lineNumber: number, svgRect: DOMRect, sx: number): TapLineInfo {
 		const doc = this.view.state.doc;
 		const line = doc.line(lineNumber);
-		const sy = this.view.scaleY || 1;
-		const block = this.view.lineBlockAt(line.from);
-		const top = unzoomedLineTop(this.view, line.from);
-		const height = (block.bottom - block.top) / sy;
-		const endCoords = this.view.coordsAtPos(line.to);
+		const { top, bottom } = this.textLineBounds(lineNumber);
+		const endCoords = typeof this.view.coordsAtPos === "function" ? this.view.coordsAtPos(line.to) : null;
 		const lineEndX = endCoords ? Math.max(0, (endCoords.right - svgRect.left) / sx) : 0;
-		return { top, bottom: top + height, lineTo: line.to, lineEndX };
+		return { top, bottom, lineTo: line.to, lineEndX };
+	}
+
+	private mathInsertionLineAt(lineNumber: number): MathInsertionLine {
+		const line = this.view.state.doc.line(lineNumber);
+		const { top, bottom } = this.textLineBounds(lineNumber);
+		return { number: line.number, from: line.from, to: line.to, text: line.text, top, bottom };
 	}
 
 	private applyTapToType(clientX: number, clientY: number, target: EventTarget | null): void {
@@ -3590,6 +3633,10 @@ export class InkView implements PluginValue {
 		}
 	}
 
+	private readonly onScroll = (): void => {
+		if (this.mathBarEl?.isConnected) this.positionMathBar();
+	};
+
 	private clearMathBuffer(): void {
 		if (this.mathTimer !== null) {
 			window.clearTimeout(this.mathTimer);
@@ -3600,6 +3647,7 @@ export class InkView implements PluginValue {
 	}
 
 	private clearMathBar(): void {
+		this.mathPreviewSeq++;
 		this.pendingMath = null;
 		this.mathBarEl?.remove();
 		this.mathBarEl = null;
@@ -3617,13 +3665,77 @@ export class InkView implements PluginValue {
 		return this.mathBarEl;
 	}
 
+	private activeFormulaBox(): BBox | null {
+		if (this.pendingMath) return this.pendingMath.box;
+		if (this.mathBuffer.length === 0 || !this.path || !this.store.isLoaded(this.path)) return null;
+		const ink = this.store.get(this.path);
+		if (!ink) return null;
+		const ids = new Set(this.mathBuffer);
+		let minX = Infinity;
+		let minY = Infinity;
+		let maxX = -Infinity;
+		let maxY = -Infinity;
+		for (const s of ink.strokes) {
+			if (!ids.has(s.id)) continue;
+			const [ox, top] = this.place(s);
+			const b = shapeOf(s).box;
+			minX = Math.min(minX, b.minX + ox);
+			minY = Math.min(minY, b.minY + top);
+			maxX = Math.max(maxX, b.maxX + ox);
+			maxY = Math.max(maxY, b.maxY + top);
+		}
+		return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+	}
+
+	private positionMathBar(): void {
+		const bar = this.mathBarEl;
+		if (!bar || !bar.isConnected) return;
+		const leaf = bar.parentElement;
+		if (!leaf) return;
+		const header = leaf.querySelector<HTMLElement>(":scope > .view-header");
+		const headerBottom = header && header.offsetHeight > 0 ? header.offsetTop + header.offsetHeight : 0;
+		const leafRect = typeof leaf.getBoundingClientRect === "function" ? leaf.getBoundingClientRect() : null;
+		let inlineTitle: VerticalBand | null = null;
+		const titleEl = leaf.querySelector<HTMLElement>(".inline-title");
+		if (titleEl && leafRect && typeof titleEl.getBoundingClientRect === "function") {
+			const cs = typeof getComputedStyle === "function" ? getComputedStyle(titleEl) : null;
+			if (!cs || (cs.display !== "none" && cs.visibility !== "hidden")) {
+				const tRect = titleEl.getBoundingClientRect();
+				if (tRect.height > 0) {
+					inlineTitle = { top: tRect.top - leafRect.top, bottom: tRect.bottom - leafRect.top };
+				}
+			}
+		}
+		let formulaRect: VerticalBand | null = null;
+		const box = this.activeFormulaBox();
+		if (box && leafRect && typeof this.svg.getBoundingClientRect === "function") {
+			const svgRect = this.svg.getBoundingClientRect();
+			const sy = this.effectiveScaleY();
+			if (svgRect.height > 0 || svgRect.top !== 0) {
+				formulaRect = {
+					top: svgRect.top + box.minY * sy - leafRect.top,
+					bottom: svgRect.top + box.maxY * sy - leafRect.top,
+				};
+			}
+		}
+		const top = planMathBarTop({
+			leafHeight: leaf.clientHeight || 0,
+			barHeight: bar.offsetHeight || 48,
+			headerBottom,
+			inlineTitle,
+			formulaRect,
+		});
+		bar.style.top = `${Math.round(top)}px`;
+	}
+
 	private showMathBufferBar(): void {
 		const bar = this.ensureMathBar();
 		if (!bar) return;
 		bar.empty();
+		const controls = bar.createDiv({ cls: "pl-math-controls" });
 		const count = this.mathBuffer.length;
-		bar.createSpan({ cls: "pl-math-status", text: `Formel (${count} ${count === 1 ? "Strich" : "Striche"})` });
-		const go = bar.createEl("button", { cls: "mod-cta pl-math-btn", text: "→ LaTeX" });
+		controls.createSpan({ cls: "pl-math-status", text: `Formel (${count} ${count === 1 ? "Strich" : "Striche"})` });
+		const go = controls.createEl("button", { cls: "mod-cta pl-math-btn", text: "→ LaTeX" });
 		onTap(go, () => {
 			if (this.mathTimer !== null) {
 				window.clearTimeout(this.mathTimer);
@@ -3631,11 +3743,51 @@ export class InkView implements PluginValue {
 			}
 			void this.flushMathBuffer();
 		});
-		const cancel = bar.createEl("button", { cls: "pl-math-btn", text: "×" });
+		const cancel = controls.createEl("button", { cls: "pl-math-btn", text: "×" });
 		onTap(cancel, () => {
 			this.clearMathBuffer();
 			this.clearMathBar();
 		});
+		this.positionMathBar();
+	}
+
+	private updateMathPreview(previewEl: HTMLElement, rawTex: string): void {
+		const tex = stripLatexDelimiters(rawTex);
+		const seq = ++this.mathPreviewSeq;
+		if (!tex) {
+			previewEl.replaceChildren();
+			previewEl.classList.add("is-empty");
+			this.positionMathBar();
+			return;
+		}
+		previewEl.classList.remove("is-empty");
+		const display = isBlockLatex(tex, this.host.getSettings().mathDelimiters);
+		const renderNow = () => {
+			if (this.destroyed || seq !== this.mathPreviewSeq || !previewEl.isConnected) return;
+			try {
+				if (typeof renderMath === "function") {
+					const mathEl = renderMath(tex, display);
+					previewEl.replaceChildren(mathEl);
+					if (typeof finishRenderMath === "function") void finishRenderMath();
+					this.positionMathBar();
+					return;
+				}
+			} catch {
+				/* Fall back to raw TeX while editing incomplete expressions. */
+			}
+			previewEl.setText(tex);
+			this.positionMathBar();
+		};
+		if (typeof loadMathJax === "function") {
+			void loadMathJax().then(renderNow, () => {
+				if (!this.destroyed && seq === this.mathPreviewSeq && previewEl.isConnected) {
+					previewEl.setText(tex);
+					this.positionMathBar();
+				}
+			});
+		} else {
+			renderNow();
+		}
 	}
 
 	private showMathConfirmBar(pending: { path: string; strokeIds: string[]; rawTex: string; midY: number; box: BBox }, usedVision: boolean): void {
@@ -3648,13 +3800,17 @@ export class InkView implements PluginValue {
 		}
 		this.pendingMath = pending;
 		bar.empty();
-		bar.createSpan({ cls: "pl-math-badge", text: usedVision ? "Gemini LaTeX" : "LaTeX" });
-		const input = bar.createEl("input", {
+		const controls = bar.createDiv({ cls: "pl-math-controls" });
+		controls.createSpan({ cls: "pl-math-badge", text: usedVision ? "Gemini LaTeX" : "LaTeX" });
+		const input = controls.createEl("input", {
 			cls: "pl-math-input",
 			type: "text",
 			value: pending.rawTex,
 			attr: { "aria-label": "Erkannte LaTeX-Formel bearbeiten" },
 		});
+		const preview = bar.createDiv({ cls: "pl-math-preview", attr: { "aria-live": "polite" } });
+		this.updateMathPreview(preview, input.value);
+		input.addEventListener("input", () => this.updateMathPreview(preview, input.value));
 		input.addEventListener("keydown", (e) => {
 			if (e.key === "Enter") {
 				e.preventDefault();
@@ -3664,10 +3820,10 @@ export class InkView implements PluginValue {
 				this.clearMathBar();
 			}
 		});
-		const insertBtn = bar.createEl("button", { cls: "mod-cta pl-math-btn", text: "Einfügen" });
+		const insertBtn = controls.createEl("button", { cls: "mod-cta pl-math-btn", text: "Einfügen" });
 		onTap(insertBtn, () => this.commitPendingMath(input.value));
 		if (this.host.openAssistant) {
-			const geminiBtn = bar.createEl("button", { cls: "pl-math-btn", text: "Gemini" });
+			const geminiBtn = controls.createEl("button", { cls: "pl-math-btn", text: "Gemini" });
 			onTap(geminiBtn, () => {
 				const ink = this.store.get(pending.path);
 				const ids = new Set(pending.strokeIds);
@@ -3675,8 +3831,9 @@ export class InkView implements PluginValue {
 				if (src.length > 0) this.openGeminiForStrokes(src, "Wandle diese handschriftliche Formel in sauberes Obsidian-LaTeX ($...$ / $$...$$) um.");
 			});
 		}
-		const cancelBtn = bar.createEl("button", { cls: "pl-math-btn", text: "Behalten" });
+		const cancelBtn = controls.createEl("button", { cls: "pl-math-btn", text: "Behalten" });
 		onTap(cancelBtn, () => this.clearMathBar());
+		this.positionMathBar();
 	}
 
 	private commitPendingMath(rawTex: string): boolean {
@@ -3695,30 +3852,38 @@ export class InkView implements PluginValue {
 		if (removeIds.length > 0) this.store.removeStrokes(pending.path, removeIds, newId());
 
 		this.applyGeometry(this.readGeometry(this.view));
-		const rect = this.svg.getBoundingClientRect();
-		const sx = this.effectiveScaleX();
 		const doc = this.view.state.doc;
 		const sy = this.view.scaleY || 1;
 		const lineH = (this.view.defaultLineHeight || 24) / sy;
-		const lastLine = this.lineInfoAt(doc.lines, rect, sx);
+		const lastLine = this.mathInsertionLineAt(doc.lines);
 		const midY = pending.midY;
-		const targetLine = midY <= lastLine.bottom + lineH * 0.4
-			? doc.lineAt(this.view.lineBlockAtHeight(Math.max(0, midY) * sy).from)
-			: doc.line(doc.lines);
-		const { prefixNewlines, from } = insertionPosForY(midY, lastLine, lineH, targetLine.to, doc.length);
-		const existingLine = doc.lineAt(from);
-		const leading =
-			prefixNewlines > 0
-				? "\n".repeat(prefixNewlines)
-				: existingLine.text.trim().length > 0 && formatted.startsWith("$$")
-					? "\n"
-					: existingLine.length > 0
-						? " "
-						: "";
-		const insert = `${leading}${formatted}`;
+		const targetLineNum =
+			midY <= lastLine.bottom + lineH * 0.4
+				? doc.lineAt(this.view.lineBlockAtHeight(Math.max(0, midY) * sy).from).number
+				: doc.lines;
+		const lineAtY = targetLineNum === doc.lines ? lastLine : this.mathInsertionLineAt(targetLineNum);
+		const head = this.view.state.selection.main.head;
+		const cursorLineNum = doc.lineAt(head).number;
+		const cursorLine =
+			cursorLineNum === lastLine.number
+				? lastLine
+				: cursorLineNum === lineAtY.number
+					? lineAtY
+					: this.mathInsertionLineAt(cursorLineNum);
+		const inSpace = spaceLayout(this.view).some((s) => midY >= s.top && midY <= s.top + s.height);
+		const plan = planMathInsertion({
+			formatted,
+			docLength: doc.length,
+			lineHeight: lineH,
+			box: pending.box,
+			lastLine,
+			lineAtY,
+			cursor: { head, line: cursorLine, hasFocus: !!this.view.hasFocus },
+			inSpace,
+		});
 		this.view.dispatch({
-			changes: { from, to: from, insert },
-			selection: { anchor: from + insert.length },
+			changes: { from: plan.from, to: plan.from, insert: plan.insert },
+			selection: { anchor: plan.anchor },
 			userEvent: "input",
 		});
 		new Notice(`LaTeX eingefügt: ${formatted}`, 2500);
@@ -3830,7 +3995,9 @@ export class InkView implements PluginValue {
 		const bar = this.ensureMathBar();
 		if (bar) {
 			bar.empty();
-			bar.createSpan({ cls: "pl-math-status", text: "Formel wird erkannt…" });
+			const controls = bar.createDiv({ cls: "pl-math-controls" });
+			controls.createSpan({ cls: "pl-math-status", text: "Formel wird erkannt…" });
+			this.positionMathBar();
 		}
 		const { tex: rawTex, usedVision } = await recognizeMathStrokes(overlayStrokes, box, {
 			provider: settings.mathProvider,
