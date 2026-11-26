@@ -1,0 +1,22 @@
+{
+  "scripts": {
+    "install": {
+      "command": "npm ci"
+    },
+    "dev": {
+      "command": "npm run dev"
+    },
+    "test": {
+      "command": "npm test"
+    },
+    "lint": {
+      "command": "npm run lint"
+    },
+    "build": {
+      "command": "npm run build"
+    },
+    "verify": {
+      "command": "npm test && npm run lint && npm run build && git diff --check"
+    }
+  }
+}
