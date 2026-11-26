@@ -506,7 +506,7 @@ export class InkView implements PluginValue {
 		readonly view: EditorView,
 		private readonly host: InkHost,
 	) {
-		this.svg = svgEl("svg", "pencil-layer-overlay");
+		this.svg = svgEl("svg", "ink-pages-overlay");
 		this.svg.setAttribute("aria-hidden", "true");
 		this.gGuides = svgEl("g", "pl-guides");
 		this.gHl = svgEl("g", "pl-hl");
@@ -739,7 +739,7 @@ export class InkView implements PluginValue {
 				this.resolvePositions();
 				this.scheduleRender();
 			},
-			(err) => console.error("[pencil-layer] load failed", err),
+			(err) => console.error("[ink-pages] load failed", err),
 		);
 		this.scheduleRender();
 	}
@@ -2034,7 +2034,7 @@ export class InkView implements PluginValue {
 	private isInteractiveEditorTarget(target: EventTarget | null): boolean {
 		if (!(target instanceof Element)) return false;
 		return !!target.closest(
-			"a, button, input, textarea, select, label, .clickable-icon, .internal-link, .external-link, .task-list-item-checkbox, .cm-foldGutter, .callout-fold, .pl-menu, .pencil-layer-toolbar",
+			"a, button, input, textarea, select, label, .clickable-icon, .internal-link, .external-link, .task-list-item-checkbox, .cm-foldGutter, .callout-fold, .pl-menu, .ink-pages-toolbar",
 		);
 	}
 
@@ -3029,7 +3029,7 @@ export class InkView implements PluginValue {
 			);
 			void copyPngToClipboard(png);
 		} catch (err) {
-			console.warn("[pencil-layer] PNG for the system clipboard failed", err);
+			console.warn("[ink-pages] PNG for the system clipboard failed", err);
 		}
 		return true;
 	}
@@ -3871,6 +3871,6 @@ export function inkExtension(host: InkHost): Extension {
 	const plugin = ViewPlugin.define((view) => new InkView(view, host));
 	return [
 		plugin,
-		EditorView.contentAttributes.of({ class: "pencil-layer-content" }),
+		EditorView.contentAttributes.of({ class: "ink-pages-content" }),
 	];
 }

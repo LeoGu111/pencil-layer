@@ -10,7 +10,7 @@ import { copyInkData, inkLinesOf, splitLines } from "./inkCopy";
 import { layoutDrawings } from "./inkDrawings";
 import { renderDrawingPng } from "./drawingPng";
 
-/** One drawing of a note rendered as an image (see `PencilLayerApi.inkDrawings`). */
+/** One drawing of a note rendered as an image (see `InkPagesApi.inkDrawings`). */
 export interface InkDrawing {
 	/** 0-based line, numbered like `inkLines`: a space's display line / a margin cluster's first anchor line. */
 	line: number;
@@ -24,7 +24,7 @@ export interface InkDrawing {
 	height: number;
 }
 
-export interface PencilLayerApi {
+export interface InkPagesApi {
 	version: 1;
 	/**
 	 * 0-based lines of the note's CURRENT text that ink is attached to, sorted, unique:
@@ -53,7 +53,10 @@ export interface PencilLayerApi {
 	inkDrawings(file: TFile): Promise<InkDrawing[]>;
 }
 
-export function createApi(app: App, store: () => InkStore): PencilLayerApi {
+/** @deprecated Use `InkPagesApi`. */
+export type PencilLayerApi = InkPagesApi;
+
+export function createApi(app: App, store: () => InkStore): InkPagesApi {
 	/** The note's editor, if it is open in one (its text may be newer than the file). */
 	const openView = (file: TFile): MarkdownView | null => {
 		for (const leaf of app.workspace.getLeavesOfType("markdown")) {
@@ -88,7 +91,7 @@ export function createApi(app: App, store: () => InkStore): PencilLayerApi {
 			return inkLinesOf(ink, lines);
 		},
 		async copyInk(src, dst, lineMap) {
-			if (src.path === dst.path) throw new Error("Pencil Layer copyInk: src and dst are the same note");
+			if (src.path === dst.path) throw new Error("Ink Pages copyInk: src and dst are the same note");
 			const s = store();
 			const ink = await inkOf(src);
 			const [srcLines, dstLines] = await Promise.all([textOf(src), textOf(dst)]);

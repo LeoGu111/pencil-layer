@@ -230,7 +230,7 @@ export class InkStore {
 		this.timers = opts.timers ?? defaultTimers;
 		this.root = opts.root ?? ".pencil";
 		this.maxUndo = opts.maxUndo ?? 200;
-		this.onError = opts.onError ?? ((err, ctx) => console.error(`[pencil-layer] ${ctx}`, err));
+		this.onError = opts.onError ?? ((err, ctx) => console.error(`[ink-pages] ${ctx}`, err));
 	}
 
 	sidecarPath(notePath: string): string {

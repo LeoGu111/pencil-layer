@@ -1,8 +1,8 @@
 /* ---------- Ink overlay ---------- */
 
 /* Room to draw or tap to type past the end of the note — always scrollable even on blank pages. */
-.markdown-source-view.mod-cm6 .cm-content.pencil-layer-content,
-.cm-content.pencil-layer-content {
+.markdown-source-view.mod-cm6 .cm-content.ink-pages-content,
+.cm-content.ink-pages-content {
 	min-height: 120vh !important;
 	padding-bottom: 120vh;
 }
@@ -94,7 +94,7 @@
 	flex-shrink: 0 !important;
 }
 
-.pencil-layer-overlay {
+.ink-pages-overlay {
 	position: absolute;
 	left: 0;
 	top: 0;
@@ -106,12 +106,12 @@
 	-webkit-user-select: none;
 }
 
-.pencil-layer-overlay .pl-hl path {
+.ink-pages-overlay .pl-hl path {
 	opacity: 0.35;
 }
 
 /* Highlighter tints the text beneath it in light themes. */
-.theme-light .pencil-layer-overlay {
+.theme-light .ink-pages-overlay {
 	mix-blend-mode: multiply;
 }
 
@@ -126,7 +126,7 @@
 	position: relative;
 }
 
-.pencil-layer-toolbar {
+.ink-pages-toolbar {
 	--pl-btn: 36px;
 	--pl-color: 32px;
 	--pl-pad: 4px;
@@ -147,36 +147,36 @@
 	-webkit-touch-callout: none;
 }
 
-.pencil-layer-toolbar[data-orient="vertical"] {
+.ink-pages-toolbar[data-orient="vertical"] {
 	display: flex;
 	flex-direction: column;
 }
 
-.theme-dark .pencil-layer-toolbar {
+.theme-dark .ink-pages-toolbar {
 	--pl-shadow: 0 6px 24px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.3);
 }
 
 @supports (background: color-mix(in srgb, red 10%, transparent)) {
-	.pencil-layer-toolbar {
+	.ink-pages-toolbar {
 		--pl-tint: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
 		--pl-glass: color-mix(in srgb, var(--background-primary) 72%, transparent);
 		--pl-glass-border: color-mix(in srgb, var(--text-normal) 10%, transparent);
 	}
 }
 
-.pencil-layer-toolbar.is-hidden,
-.pencil-layer-toolbar .is-hidden {
+.ink-pages-toolbar.is-hidden,
+.ink-pages-toolbar .is-hidden {
 	display: none !important;
 }
 
 /* No ink in Reading view, so no toolbar there either. */
-.workspace-leaf-content[data-mode="preview"] > .pencil-layer-toolbar {
+.workspace-leaf-content[data-mode="preview"] > .ink-pages-toolbar {
 	display: none;
 }
 
 /* Translucent blurred glass: the capsule and the popovers. */
-.pencil-layer-toolbar .pl-capsule,
-.pencil-layer-toolbar .pl-popover {
+.ink-pages-toolbar .pl-capsule,
+.ink-pages-toolbar .pl-popover {
 	background: var(--pl-glass);
 	-webkit-backdrop-filter: blur(20px) saturate(170%);
 	backdrop-filter: blur(20px) saturate(170%);
@@ -186,20 +186,20 @@
 
 /* Popovers hold text: less see-through than the bar. */
 @supports (background: color-mix(in srgb, red 10%, transparent)) {
-	.pencil-layer-toolbar .pl-popover {
+	.ink-pages-toolbar .pl-popover {
 		background: color-mix(in srgb, var(--background-primary) 90%, transparent);
 	}
 }
 
 /* Without backdrop-filter the glass would be hard to read over text: make it opaque. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-	.pencil-layer-toolbar {
+	.ink-pages-toolbar {
 		--pl-glass: var(--background-primary);
 	}
 }
 
 /* Capsule: fully rounded ends (radius = thickness / 2). */
-.pencil-layer-toolbar .pl-capsule {
+.ink-pages-toolbar .pl-capsule {
 	display: flex;
 	align-items: center;
 	gap: 2px;
@@ -210,7 +210,7 @@
 	border-radius: 999px;
 }
 
-.pencil-layer-toolbar[data-orient="vertical"] .pl-capsule {
+.ink-pages-toolbar[data-orient="vertical"] .pl-capsule {
 	flex-direction: column;
 	flex: 0 1 auto;
 	min-height: 0;
@@ -221,23 +221,23 @@
 }
 
 /* Collapsed (Stage M: tap the grip): grip, undo/redo and tools only. */
-.pencil-layer-toolbar.is-collapsed .pl-exp {
+.ink-pages-toolbar.is-collapsed .pl-exp {
 	display: none;
 }
 
-.pencil-layer-toolbar .pl-group {
+.ink-pages-toolbar .pl-group {
 	display: flex;
 	flex: none;
 	align-items: center;
 	gap: 2px;
 }
 
-.pencil-layer-toolbar[data-orient="vertical"] .pl-group {
+.ink-pages-toolbar[data-orient="vertical"] .pl-group {
 	flex-direction: column;
 }
 
 /* Fixed-size options area: the bar never changes size when switching tools. */
-.pencil-layer-toolbar .pl-options {
+.ink-pages-toolbar .pl-options {
 	display: flex;
 	flex: 0 1 var(--pl-opt-len);
 	width: var(--pl-opt-len);
@@ -247,7 +247,7 @@
 	overflow: hidden;
 }
 
-.pencil-layer-toolbar[data-orient="vertical"] .pl-options {
+.ink-pages-toolbar[data-orient="vertical"] .pl-options {
 	flex-direction: column;
 	width: auto;
 	height: var(--pl-opt-len);
@@ -255,7 +255,7 @@
 }
 
 /* Eraser / lasso: the reserved area shows the current mode (tap the tool again for options). */
-.pencil-layer-toolbar .pl-caption {
+.ink-pages-toolbar .pl-caption {
 	flex: 1 1 auto;
 	min-width: 0;
 	overflow: hidden;
@@ -268,13 +268,13 @@
 	cursor: pointer;
 }
 
-.pencil-layer-toolbar[data-orient="vertical"] .pl-caption {
+.ink-pages-toolbar[data-orient="vertical"] .pl-caption {
 	writing-mode: vertical-rl;
 	min-height: 0;
 	padding: 8px 0;
 }
 
-.pencil-layer-toolbar .pl-grip {
+.ink-pages-toolbar .pl-grip {
 	display: flex;
 	flex: none;
 	align-items: center;
@@ -291,32 +291,32 @@
 	user-select: none;
 }
 
-.pencil-layer-toolbar .pl-grip:hover,
-.pencil-layer-toolbar .pl-grip.is-open {
+.ink-pages-toolbar .pl-grip:hover,
+.ink-pages-toolbar .pl-grip.is-open {
 	background: var(--background-modifier-hover);
 }
 
-.pencil-layer-toolbar[data-orient="vertical"] .pl-grip {
+.ink-pages-toolbar[data-orient="vertical"] .pl-grip {
 	width: var(--pl-btn);
 	height: 22px;
 }
 
-.pencil-layer-toolbar .pl-grip svg.svg-icon {
+.ink-pages-toolbar .pl-grip svg.svg-icon {
 	width: 16px;
 	height: 16px;
 }
 
-.pencil-layer-toolbar.is-dragging,
-.pencil-layer-toolbar.is-dragging .pl-grip {
+.ink-pages-toolbar.is-dragging,
+.ink-pages-toolbar.is-dragging .pl-grip {
 	cursor: grabbing;
 }
 
-.pencil-layer-toolbar.is-dragging .pl-capsule {
+.ink-pages-toolbar.is-dragging .pl-capsule {
 	box-shadow: 0 10px 32px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 
 /* Circular buttons. */
-.pencil-layer-toolbar .pl-btn {
+.ink-pages-toolbar .pl-btn {
 	display: flex;
 	flex: none;
 	align-items: center;
@@ -331,32 +331,32 @@
 	color: var(--icon-color);
 }
 
-.pencil-layer-toolbar .pl-btn svg.svg-icon {
+.ink-pages-toolbar .pl-btn svg.svg-icon {
 	width: 20px;
 	height: 20px;
 }
 
 /* Active tool / preset: tinted circle, accent-colored icon. */
-.pencil-layer-toolbar .pl-tool.is-active,
-.pencil-layer-toolbar .pl-variant.is-active {
+.ink-pages-toolbar .pl-tool.is-active,
+.ink-pages-toolbar .pl-variant.is-active {
 	background: var(--pl-tint);
 	color: var(--interactive-accent);
 }
 
-.pencil-layer-toolbar .pl-btn.is-open {
+.ink-pages-toolbar .pl-btn.is-open {
 	background: var(--background-modifier-hover);
 }
 
-.pencil-layer-toolbar .pl-tool.is-active.is-open {
+.ink-pages-toolbar .pl-tool.is-active.is-open {
 	box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
 }
 
-.pencil-layer-toolbar .pl-btn.is-disabled {
+.ink-pages-toolbar .pl-btn.is-disabled {
 	opacity: 0.35;
 	cursor: default;
 }
 
-.pencil-layer-toolbar .pl-sep {
+.ink-pages-toolbar .pl-sep {
 	flex: none;
 	width: 1px;
 	height: 20px;
@@ -364,29 +364,29 @@
 	background: var(--background-modifier-border);
 }
 
-.pencil-layer-toolbar[data-orient="vertical"] .pl-sep {
+.ink-pages-toolbar[data-orient="vertical"] .pl-sep {
 	width: 20px;
 	height: 1px;
 	margin: 3px 0;
 }
 
 /* Pen preset / highlighter width samples (circular buttons). */
-.pencil-layer-toolbar .pl-variants {
+.ink-pages-toolbar .pl-variants {
 	gap: 2px;
 }
 
-.pencil-layer-toolbar .pl-sample {
+.ink-pages-toolbar .pl-sample {
 	width: 24px;
 	height: 22px;
 	overflow: visible;
 }
 
-.pencil-layer-toolbar .pl-sample path.is-highlighter {
+.ink-pages-toolbar .pl-sample path.is-highlighter {
 	opacity: 0.55;
 }
 
 /* Color strip: 4 circular swatches visible, the rest by (touch) scroll along the bar. */
-.pencil-layer-toolbar .pl-strip {
+.ink-pages-toolbar .pl-strip {
 	display: flex;
 	flex: 0 1 auto;
 	min-width: var(--pl-color);
@@ -400,7 +400,7 @@
 	touch-action: pan-x;
 }
 
-.pencil-layer-toolbar[data-orient="vertical"] .pl-strip {
+.ink-pages-toolbar[data-orient="vertical"] .pl-strip {
 	flex-direction: column;
 	min-width: 0;
 	max-width: none;
@@ -412,35 +412,35 @@
 	touch-action: pan-y;
 }
 
-.pencil-layer-toolbar .pl-strip::-webkit-scrollbar {
+.ink-pages-toolbar .pl-strip::-webkit-scrollbar {
 	display: none;
 }
 
 /* Hint that more colors are reachable. */
-.pencil-layer-toolbar .pl-strip.is-scrollable {
+.ink-pages-toolbar .pl-strip.is-scrollable {
 	-webkit-mask-image: linear-gradient(to right, #000 calc(100% - 10px), transparent);
 	mask-image: linear-gradient(to right, #000 calc(100% - 10px), transparent);
 }
 
-.pencil-layer-toolbar[data-orient="vertical"] .pl-strip.is-scrollable {
+.ink-pages-toolbar[data-orient="vertical"] .pl-strip.is-scrollable {
 	-webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
 	mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
 }
 
-.pencil-layer-toolbar .pl-color {
+.ink-pages-toolbar .pl-color {
 	width: var(--pl-color);
 	min-width: var(--pl-color);
 	height: var(--pl-btn);
 	scroll-snap-align: start;
 }
 
-.pencil-layer-toolbar[data-orient="vertical"] .pl-color {
+.ink-pages-toolbar[data-orient="vertical"] .pl-color {
 	width: var(--pl-btn);
 	height: var(--pl-color);
 	min-height: var(--pl-color);
 }
 
-.pencil-layer-toolbar .pl-color-dot {
+.ink-pages-toolbar .pl-color-dot {
 	display: block;
 	width: 22px;
 	height: 22px;
@@ -448,13 +448,13 @@
 	box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.35);
 }
 
-.pencil-layer-toolbar .pl-color.is-active .pl-color-dot {
+.ink-pages-toolbar .pl-color.is-active .pl-color-dot {
 	box-shadow:
 		0 0 0 2px var(--background-primary),
 		0 0 0 4px var(--interactive-accent);
 }
 
-.pencil-layer-toolbar .pl-palette-colors {
+.ink-pages-toolbar .pl-palette-colors {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 4px;
@@ -462,7 +462,7 @@
 
 /* ---------- Popovers: ⋯ and tool settings (placed by the script, toward the roomier side) ---------- */
 
-.pencil-layer-toolbar .pl-popover {
+.ink-pages-toolbar .pl-popover {
 	position: absolute;
 	z-index: 30;
 	display: flex;
@@ -478,13 +478,13 @@
 	touch-action: pan-y;
 }
 
-.pencil-layer-toolbar .pl-popover:not(.pl-popover-more) {
+.ink-pages-toolbar .pl-popover:not(.pl-popover-more) {
 	width: 280px;
 	padding: 10px 12px 12px;
 	gap: 8px;
 }
 
-.pencil-layer-toolbar .pl-menu-item {
+.ink-pages-toolbar .pl-menu-item {
 	display: flex;
 	align-items: center;
 	gap: 10px;
@@ -497,51 +497,51 @@
 	font-size: var(--font-ui-small);
 }
 
-.pencil-layer-toolbar .pl-menu-item:hover {
+.ink-pages-toolbar .pl-menu-item:hover {
 	background: var(--background-modifier-hover);
 }
 
-.pencil-layer-toolbar .pl-menu-icon,
-.pencil-layer-toolbar .pl-menu-check {
+.ink-pages-toolbar .pl-menu-icon,
+.ink-pages-toolbar .pl-menu-check {
 	display: flex;
 	color: var(--icon-color);
 }
 
-.pencil-layer-toolbar .pl-menu-check {
+.ink-pages-toolbar .pl-menu-check {
 	margin-left: auto;
 	color: var(--interactive-accent);
 }
 
-.pencil-layer-toolbar .pl-menu-item svg {
+.ink-pages-toolbar .pl-menu-item svg {
 	width: 18px;
 	height: 18px;
 }
 
-.pencil-layer-toolbar .pl-pop-title {
+.ink-pages-toolbar .pl-pop-title {
 	font-weight: var(--font-semibold, 600);
 	font-size: var(--font-ui-small);
 	color: var(--text-normal);
 }
 
-.pencil-layer-toolbar .pl-pop-subtitle {
+.ink-pages-toolbar .pl-pop-subtitle {
 	margin-top: 4px;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 }
 
-.pencil-layer-toolbar .pl-pop-row {
+.ink-pages-toolbar .pl-pop-row {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
 }
 
-.pencil-layer-toolbar .pl-pop-label {
+.ink-pages-toolbar .pl-pop-label {
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 }
 
 /* Segmented control. */
-.pencil-layer-toolbar .pl-seg {
+.ink-pages-toolbar .pl-seg {
 	display: flex;
 	gap: 2px;
 	padding: 2px;
@@ -549,7 +549,7 @@
 	background: var(--background-modifier-hover);
 }
 
-.pencil-layer-toolbar .pl-seg-item {
+.ink-pages-toolbar .pl-seg-item {
 	display: flex;
 	flex: 1 1 0;
 	align-items: center;
@@ -564,7 +564,7 @@
 	cursor: pointer;
 }
 
-.pencil-layer-toolbar .pl-seg-item.is-active {
+.ink-pages-toolbar .pl-seg-item.is-active {
 	background: var(--background-primary);
 	color: var(--interactive-accent);
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
@@ -572,7 +572,7 @@
 }
 
 /* On/off row with a switch. */
-.pencil-layer-toolbar .pl-pop-toggle {
+.ink-pages-toolbar .pl-pop-toggle {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -583,7 +583,7 @@
 	color: var(--text-normal);
 }
 
-.pencil-layer-toolbar .pl-switch {
+.ink-pages-toolbar .pl-switch {
 	position: relative;
 	flex: none;
 	width: 38px;
@@ -593,7 +593,7 @@
 	transition: background-color 0.15s;
 }
 
-.pencil-layer-toolbar .pl-switch::after {
+.ink-pages-toolbar .pl-switch::after {
 	content: "";
 	position: absolute;
 	top: 2px;
@@ -606,74 +606,74 @@
 	transition: transform 0.15s;
 }
 
-.pencil-layer-toolbar .pl-switch.is-on {
+.ink-pages-toolbar .pl-switch.is-on {
 	background: var(--interactive-accent);
 }
 
-.pencil-layer-toolbar .pl-switch.is-on::after {
+.ink-pages-toolbar .pl-switch.is-on::after {
 	transform: translateX(16px);
 }
 
 /* ---------- Mobile: ≥ 40 px touch targets ---------- */
 
-.is-mobile .pencil-layer-toolbar {
+.is-mobile .ink-pages-toolbar {
 	--pl-btn: 42px;
 	--pl-color: 40px;
 }
 
-.is-mobile .pencil-layer-toolbar .pl-grip {
+.is-mobile .ink-pages-toolbar .pl-grip {
 	width: 28px;
 }
 
-.is-mobile .pencil-layer-toolbar[data-orient="vertical"] .pl-grip {
+.is-mobile .ink-pages-toolbar[data-orient="vertical"] .pl-grip {
 	width: var(--pl-btn);
 	height: 28px;
 }
 
-.is-mobile .pencil-layer-toolbar .pl-color-dot {
+.is-mobile .ink-pages-toolbar .pl-color-dot {
 	width: 26px;
 	height: 26px;
 }
 
-.is-mobile .pencil-layer-toolbar .pl-menu-item {
+.is-mobile .ink-pages-toolbar .pl-menu-item {
 	min-height: 44px;
 }
 
-.is-mobile .pencil-layer-toolbar .pl-seg-item {
+.is-mobile .ink-pages-toolbar .pl-seg-item {
 	min-height: 40px;
 }
 
-.is-mobile .pencil-layer-toolbar .pl-pop-toggle {
+.is-mobile .ink-pages-toolbar .pl-pop-toggle {
 	min-height: 44px;
 }
 
 /* Phone-width leaves: tighter capsule (the options area shrinks and scrolls). */
-.is-phone .pencil-layer-toolbar {
+.is-phone .ink-pages-toolbar {
 	--pl-btn: 40px;
 	--pl-pad: 3px;
 }
 
-.is-phone .pencil-layer-toolbar .pl-sep {
+.is-phone .ink-pages-toolbar .pl-sep {
 	margin: 0 1px;
 }
 
-.is-phone .pencil-layer-toolbar[data-orient="vertical"] .pl-sep {
+.is-phone .ink-pages-toolbar[data-orient="vertical"] .pl-sep {
 	margin: 1px 0;
 }
 
 /* ---------- Stage B: scribble preview, lasso, selection ---------- */
 
 /* Strokes a scribble would erase fade while scribbling (erase commits on lift). */
-.pencil-layer-overlay .pl-pen path.pl-fade {
+.ink-pages-overlay .pl-pen path.pl-fade {
 	opacity: 0.3;
 }
 
-.pencil-layer-overlay .pl-hl path.pl-fade {
+.ink-pages-overlay .pl-hl path.pl-fade {
 	opacity: 0.12;
 }
 
 /* Interactive Ruler / Geodreieck / Compass overlay (renders below ink so drawn strokes stay crisp). */
-.pencil-layer-overlay .pl-set-square {
+.ink-pages-overlay .pl-set-square {
 	fill: var(--background-primary);
 	fill-opacity: 0.34;
 	stroke: var(--interactive-accent);
@@ -683,7 +683,7 @@
 	touch-action: none;
 }
 
-.pencil-layer-overlay .pl-guide-ticks {
+.ink-pages-overlay .pl-guide-ticks {
 	fill: none;
 	stroke: var(--text-normal);
 	stroke-width: 1px;
@@ -691,7 +691,7 @@
 	pointer-events: none;
 }
 
-.pencil-layer-overlay .pl-guide-cm {
+.ink-pages-overlay .pl-guide-cm {
 	fill: var(--text-muted);
 	font-size: 9px;
 	font-family: var(--font-interface, sans-serif);
@@ -699,7 +699,7 @@
 	user-select: none;
 }
 
-.pencil-layer-overlay .pl-guide-readout {
+.ink-pages-overlay .pl-guide-readout {
 	fill: var(--interactive-accent);
 	font-size: 12px;
 	font-weight: 700;
@@ -708,7 +708,7 @@
 	user-select: none;
 }
 
-.pencil-layer-overlay .pl-set-square-grip {
+.ink-pages-overlay .pl-set-square-grip {
 	fill: var(--interactive-accent);
 	stroke: var(--background-primary);
 	stroke-width: 2px;
@@ -717,7 +717,7 @@
 	touch-action: none;
 }
 
-.pencil-layer-overlay .pl-guide-rotate-grip {
+.ink-pages-overlay .pl-guide-rotate-grip {
 	fill: var(--background-primary);
 	stroke: var(--interactive-accent);
 	stroke-width: 2.5px;
@@ -726,19 +726,19 @@
 	touch-action: none;
 }
 
-.pencil-layer-overlay .pl-guide-action {
+.ink-pages-overlay .pl-guide-action {
 	cursor: pointer;
 	pointer-events: all;
 	touch-action: none;
 }
 
-.pencil-layer-overlay .pl-guide-action-bg {
+.ink-pages-overlay .pl-guide-action-bg {
 	fill: var(--background-primary);
 	stroke: var(--background-modifier-border);
 	stroke-width: 1.5px;
 }
 
-.pencil-layer-overlay .pl-guide-action-text {
+.ink-pages-overlay .pl-guide-action-text {
 	fill: var(--text-normal);
 	font-size: 11px;
 	font-weight: 700;
@@ -746,13 +746,13 @@
 	pointer-events: none;
 }
 
-.pencil-layer-overlay .pl-set-square-grip:active,
-.pencil-layer-overlay .pl-guide-rotate-grip:active {
+.ink-pages-overlay .pl-set-square-grip:active,
+.ink-pages-overlay .pl-guide-rotate-grip:active {
 	cursor: grabbing;
 }
 
-.pencil-layer-overlay .pl-lasso-path,
-.pencil-layer-overlay .pl-sel-box {
+.ink-pages-overlay .pl-lasso-path,
+.ink-pages-overlay .pl-sel-box {
 	fill: none;
 	stroke: var(--interactive-accent);
 	stroke-width: 1.5px;
@@ -761,19 +761,19 @@
 	vector-effect: non-scaling-stroke;
 }
 
-.pencil-layer-overlay .pl-sel-box {
+.ink-pages-overlay .pl-sel-box {
 	fill: color-mix(in srgb, var(--interactive-accent) 5%, transparent);
 }
 
 /* Eraser position while erasing (radius = eraser size). */
-.pencil-layer-overlay .pl-eraser-cursor {
+.ink-pages-overlay .pl-eraser-cursor {
 	fill: color-mix(in srgb, var(--text-normal) 6%, transparent);
 	stroke: var(--text-muted);
 	stroke-width: 1px;
 	vector-effect: non-scaling-stroke;
 }
 
-.pencil-layer-overlay .pl-sel-handle {
+.ink-pages-overlay .pl-sel-handle {
 	fill: var(--background-primary);
 	stroke: var(--interactive-accent);
 	stroke-width: 2px;
@@ -1021,12 +1021,12 @@
 /* ---------- Stage F: ink selection on the Mac (slim toolbar + Select tool) ---------- */
 
 /* Slim desktop toolbar (Mouse draws off): Undo, Redo, Select, Show/Hide ink, ⋯. */
-.pencil-layer-toolbar:not(.is-slim) .pl-slim-only,
-.pencil-layer-toolbar.is-slim .pl-full-only {
+.ink-pages-toolbar:not(.is-slim) .pl-slim-only,
+.ink-pages-toolbar.is-slim .pl-full-only {
 	display: none;
 }
 
-.pencil-layer-toolbar .pl-pop-hint {
+.ink-pages-toolbar .pl-pop-hint {
 	max-width: 260px;
 	font-size: var(--font-ui-smaller);
 	line-height: 1.35;
@@ -1035,16 +1035,16 @@
 
 /* [Stage H] Select on must be obvious (it changes what a click in the note does): a solid accent
    button and an accent ring around the whole bar. */
-.pencil-layer-toolbar .pl-tool[data-tool="select"].is-active {
+.ink-pages-toolbar .pl-tool[data-tool="select"].is-active {
 	background: var(--interactive-accent);
 	color: var(--text-on-accent);
 }
 
-.pencil-layer-toolbar .pl-tool[data-tool="select"].is-active.is-open {
+.ink-pages-toolbar .pl-tool[data-tool="select"].is-active.is-open {
 	box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--text-on-accent) 55%, transparent);
 }
 
-.pencil-layer-toolbar.is-selecting .pl-capsule {
+.ink-pages-toolbar.is-selecting .pl-capsule {
 	outline: 2px solid var(--interactive-accent);
 	outline-offset: -1px;
 }
@@ -1344,8 +1344,8 @@ body.theme-light {
 
 /* ---------- Stage M: collapsed bar — the pen / highlighter popover hosts the options area ---------- */
 
-.pencil-layer-toolbar.is-collapsed .pl-options.is-hosted,
-.pencil-layer-toolbar .pl-options.is-hosted {
+.ink-pages-toolbar.is-collapsed .pl-options.is-hosted,
+.ink-pages-toolbar .pl-options.is-hosted {
 	display: flex;
 	flex-direction: column;
 	align-items: stretch;
@@ -1356,13 +1356,13 @@ body.theme-light {
 	overflow: visible;
 }
 
-.pencil-layer-toolbar .pl-options.is-hosted .pl-group {
+.ink-pages-toolbar .pl-options.is-hosted .pl-group {
 	flex-direction: row;
 	justify-content: center;
 }
 
 /* All colors visible, wrapped (no scrolling strip inside the popover). */
-.pencil-layer-toolbar .pl-options.is-hosted .pl-strip {
+.ink-pages-toolbar .pl-options.is-hosted .pl-strip {
 	flex-direction: row;
 	flex-wrap: wrap;
 	justify-content: center;
@@ -1377,7 +1377,7 @@ body.theme-light {
 	touch-action: manipulation;
 }
 
-.pencil-layer-toolbar .pl-options.is-hosted .pl-color {
+.ink-pages-toolbar .pl-options.is-hosted .pl-color {
 	/* 7 pen colors fit one row of the 280 px popover. */
 	width: min(var(--pl-color), 36px);
 	min-width: min(var(--pl-color), 36px);
@@ -1385,19 +1385,19 @@ body.theme-light {
 	min-height: 0;
 }
 
-.pencil-layer-toolbar .pl-popover.has-options .pl-options.is-hosted {
+.ink-pages-toolbar .pl-popover.has-options .pl-options.is-hosted {
 	padding-bottom: 6px;
 	border-bottom: 1px solid var(--background-modifier-border);
 }
 
 /* Snap-position menu: as narrow as its labels. */
-.pencil-layer-toolbar .pl-popover.pl-popover-snap {
+.ink-pages-toolbar .pl-popover.pl-popover-snap {
 	width: max-content;
 	padding: 8px 6px 6px;
 	gap: 2px;
 }
 
-.pencil-layer-toolbar .pl-popover-snap .pl-pop-title {
+.ink-pages-toolbar .pl-popover-snap .pl-pop-title {
 	padding: 0 12px 4px;
 }
 
@@ -1673,7 +1673,7 @@ body.theme-light {
 	font-size: inherit !important;
 }
 
-.pencil-layer-toolbar .pl-fx-badge,
+.ink-pages-toolbar .pl-fx-badge,
 .pl-menu .pl-fx-badge {
 	font-family: Georgia, "Times New Roman", serif;
 	font-style: italic;
@@ -1684,35 +1684,35 @@ body.theme-light {
 }
 
 /* ---------- Page boundary guides (A4 / A3 / Letter) ---------- */
-.pencil-layer-overlay .pl-guides {
+.ink-pages-overlay .pl-guides {
 	pointer-events: none;
 }
-.pencil-layer-overlay .pl-guide-line {
+.ink-pages-overlay .pl-guide-line {
 	stroke: var(--interactive-accent, #7c6cf6);
 	stroke-width: 1.25;
 	stroke-dasharray: 7 5;
 	opacity: 0.55;
 	shape-rendering: crispEdges;
 }
-.pencil-layer-overlay .pl-guide-margin {
+.ink-pages-overlay .pl-guide-margin {
 	stroke-dasharray: 4 4;
 	opacity: 0.45;
 }
-.pencil-layer-overlay .pl-guide-paper {
+.ink-pages-overlay .pl-guide-paper {
 	stroke-dasharray: none;
 	stroke-width: 1.25;
 	opacity: 0.48;
 }
-.pencil-layer-overlay .pl-guide-print-margin {
+.ink-pages-overlay .pl-guide-print-margin {
 	stroke-dasharray: 2 4;
 	stroke-width: 1;
 	opacity: 0.28;
 }
-.pencil-layer-overlay .pl-guide-overflow {
+.ink-pages-overlay .pl-guide-overflow {
 	fill: var(--text-normal, #888);
 	opacity: 0.04;
 }
-.pencil-layer-overlay .pl-guide-label {
+.ink-pages-overlay .pl-guide-label {
 	fill: var(--text-muted, #888);
 	font-size: 11px;
 	font-weight: 600;

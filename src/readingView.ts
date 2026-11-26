@@ -855,7 +855,7 @@ export class ReadingInk {
 			const shown = this.host.getSettings().inkVisible ? ink : { ...ink, strokes: [] };
 			drawSection(el, { lines, lineStart: info.lineStart, lineEnd: info.lineEnd, range, print: false, drawnIds }, shown);
 		} catch (err) {
-			console.error("[pencil-layer] reading view ink failed", err);
+			console.error("[ink-pages] reading view ink failed", err);
 		}
 	}
 
@@ -894,7 +894,7 @@ export class ReadingInk {
 			try {
 				this.layoutPrint(el, file, text, ink, cfg, page, style);
 			} catch (err) {
-				console.error("[pencil-layer] PDF ink failed", err);
+				console.error("[ink-pages] PDF ink failed", err);
 			} finally {
 				if (page) page.style.width = prevWidth;
 			}

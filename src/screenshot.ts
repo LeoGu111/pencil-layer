@@ -226,7 +226,7 @@ export async function copyPngToClipboard(png: Blob | Promise<Blob>): Promise<boo
 		await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
 		return true;
 	} catch (err) {
-		console.warn("[pencil-layer] copying the image to the clipboard failed", err);
+		console.warn("[ink-pages] copying the image to the clipboard failed", err);
 		return false;
 	}
 }
@@ -396,7 +396,7 @@ export class ScreenshotModal extends Modal {
 			// Final check: drawing the text layer must not have tainted the composite.
 			this.textStage.getContext("2d")?.getImageData(0, 0, 1, 1);
 		} catch (err) {
-			console.warn("[pencil-layer] screenshot: text rasterization failed, using ink only", err);
+			console.warn("[ink-pages] screenshot: text rasterization failed, using ink only", err);
 			freeCanvas(this.textStage);
 			this.textStage = null;
 			this.textFailed = "Text couldn't be rendered on this device — the screenshot contains ink only.";
@@ -517,7 +517,7 @@ export class ScreenshotModal extends Modal {
 			.then((blob) => nav.share?.({ files: [new File([blob], name, { type: "image/png" })] }))
 			.catch((err: unknown) => {
 				if (err instanceof Error && err.name === "AbortError") return; // user dismissed the sheet
-				console.warn("[pencil-layer] share failed", err);
+				console.warn("[ink-pages] share failed", err);
 				new Notice("Sharing failed. Try “Save to vault” instead.");
 			});
 	}
@@ -538,7 +538,7 @@ export class ScreenshotModal extends Modal {
 			}
 			this.close();
 		} catch (err) {
-			console.error("[pencil-layer] saving the screenshot failed", err);
+			console.error("[ink-pages] saving the screenshot failed", err);
 			new Notice("Saving the screenshot failed.");
 		}
 	}

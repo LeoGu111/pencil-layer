@@ -357,7 +357,7 @@ No. It works on Markdown notes in the editor, with read-only display in Reading 
 
 ## For plugin developers
 
-Ink Pages exposes a small API at `app.plugins.plugins["ink-pages"].api` (type `PencilLayerApi`, see `src/api.ts`). It can list the lines of a note that carry ink, copy ink to a reorganized copy of a note, and render a note's drawings to PNG images.
+Ink Pages exposes a small API at `app.plugins.plugins["ink-pages"].api` (type `InkPagesApi`, see `src/api.ts`). It can list the lines of a note that carry ink, copy ink to a reorganized copy of a note, and render a note's drawings to PNG images.
 
 ## Development
 

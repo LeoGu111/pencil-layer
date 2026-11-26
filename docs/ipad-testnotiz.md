@@ -1,4 +1,4 @@
-# Pencil Layer – iPad-Testnotiz
+# Ink Pages – iPad-Testnotiz
 
 Kopiere diese Datei als eigene Notiz in einen Test-Vault. Der lokale Build besteht aus `main.js`, `manifest.json` und `styles.css`. Erzeuge ihn mit `npm run build` und verwende diese drei Dateien gemeinsam im Plugin-Ordner des Test-Vaults.
 

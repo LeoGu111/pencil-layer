@@ -1,5 +1,5 @@
 /**
- * Pure data model for Pencil Layer: types, line hashing, anchor resolution and
+ * Pure data model for Ink Pages: types, line hashing, anchor resolution and
  * (de)serialization of the per-note sidecar file. No Obsidian / DOM imports.
  */
 

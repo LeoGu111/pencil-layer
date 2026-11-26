@@ -1,7 +1,7 @@
 import { VaultInkAdapter, ensureFolder } from "./vaultAdapter";
 import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile, TFolder, Vault, normalizePath } from "obsidian";
 import { InkStore } from "./store";
-import { PencilLayerApi, createApi } from "./api";
+import { InkPagesApi, createApi } from "./api";
 import { InkHost, InkView, inkExtension } from "./inkView";
 import { InkToolbar, ToolbarHost } from "./toolbar";
 import type { InkClip } from "./clipboard";
@@ -52,10 +52,10 @@ const LEGACY_KEYS = ["toolbarVisible", "mouseDraws", "penSize", "highlighterSize
 const LOCAL_KEY = "ink-pages:device";
 const PREVIOUS_LOCAL_KEY = "pencil-layer:device";
 
-export default class PencilLayerPlugin extends Plugin implements InkHost, ToolbarHost {
+export default class InkPagesPlugin extends Plugin implements InkHost, ToolbarHost {
 	store!: InkStore;
 	/** Public API for other plugins: `app.plugins.plugins["ink-pages"].api` (see api.ts). */
-	readonly api: PencilLayerApi = createApi(this.app, () => this.store);
+	readonly api: InkPagesApi = createApi(this.app, () => this.store);
 	settings: PencilSettings = { ...sanitizeSynced(null), ...sanitizeLocal(null, Platform.isMobile) };
 	readonly showMouseToggle = !Platform.isMobile;
 	/** Lasso Copy/Cut clipboard: plugin-internal, shared by all notes, session only. */
@@ -244,7 +244,7 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 		try {
 			this.app.saveLocalStorage(LOCAL_KEY, data);
 		} catch (err) {
-			console.error("[pencil-layer] failed to save device settings", err);
+			console.error("[ink-pages] failed to save device settings", err);
 		}
 	}
 
@@ -691,7 +691,7 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 				await vault.rename(f, dest);
 				moved++;
 			} catch (err) {
-				console.error("[pencil-layer] failed to move ink file", f.path, err);
+				console.error("[ink-pages] failed to move ink file", f.path, err);
 				skipped++;
 			}
 		}
@@ -702,7 +702,7 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 			Vault.recurseChildren(old, (c) => {
 				if (c instanceof TFile) onlyFolders = false;
 			});
-			if (onlyFolders) await this.app.fileManager.trashFile(old).catch((err) => console.error("[pencil-layer] failed to remove old ink folder", from, err));
+			if (onlyFolders) await this.app.fileManager.trashFile(old).catch((err) => console.error("[ink-pages] failed to remove old ink folder", from, err));
 		}
 		// Open notes re-read their ink from the new folder.
 		for (const note of this.store.loadedPaths()) void this.store.reloadFromDisk(note);
@@ -751,7 +751,7 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 			const dir = this.store.sidecarPath(file.path).replace(/\.json$/, "");
 			const inkDir = this.app.vault.getAbstractFileByPath(normalizePath(dir));
 			if (inkDir instanceof TFolder) {
-				this.app.fileManager.trashFile(inkDir).catch((err) => console.error("[pencil-layer] failed to remove ink folder", dir, err));
+				this.app.fileManager.trashFile(inkDir).catch((err) => console.error("[ink-pages] failed to remove ink folder", dir, err));
 			}
 		}
 	}
@@ -760,7 +760,7 @@ export default class PencilLayerPlugin extends Plugin implements InkHost, Toolba
 class PencilSettingTab extends PluginSettingTab {
 	constructor(
 		app: App,
-		private readonly plugin: PencilLayerPlugin,
+		private readonly plugin: InkPagesPlugin,
 	) {
 		super(app, plugin);
 	}
@@ -1075,7 +1075,7 @@ class PencilSettingTab extends PluginSettingTab {
 class InkFolderModal extends Modal {
 	constructor(
 		app: App,
-		private readonly plugin: PencilLayerPlugin,
+		private readonly plugin: InkPagesPlugin,
 		private readonly from: string,
 		private readonly to: string,
 		private readonly done: () => void,

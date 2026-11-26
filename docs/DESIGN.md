@@ -1,6 +1,6 @@
-# Pencil Layer — design (Milestone 1, updated for M2 Stages A, B, B2, A3 toolbar, C, D, E, F, G, H1, I fix, K, L and M)
+# Ink Pages — design (Milestone 1, updated for M2 Stages A, B, B2, A3 toolbar, C, D, E, F, G, H1, I fix, K, L and M)
 
-Obsidian community plugin (id `pencil-layer`, name "Pencil Layer"). Adds a GoodNotes-style ink
+Obsidian community plugin (id `ink-pages`, name "Ink Pages"). Adds a GoodNotes-style ink
 layer directly over notes in the Markdown editor (Live Preview and Source mode — both CodeMirror 6).
 
 **Core interaction model (non-negotiable):**
@@ -235,10 +235,10 @@ calls it from hook points marked `[Stage H]`), Reading view / PDF in `readingVie
 ## Public API (for other plugins)
 Other plugins (e.g. one that writes a reorganized copy of a note as a NEW
 note) can carry the ink along without knowing the sidecar format:
-`app.plugins.plugins["pencil-layer"].api` (type `PencilLayerApi` in `src/api.ts`; glue there, pure
+`app.plugins.plugins["ink-pages"].api` (type `InkPagesApi` in `src/api.ts`; glue there, pure
 remapping in `src/inkCopy.ts`, tests `tests/inkCopy.test.ts`).
 ```ts
-interface PencilLayerApi {
+interface InkPagesApi {
   version: 1;
   inkLines(file: TFile): Promise<number[]>;
   copyInk(src: TFile, dst: TFile, lineMap: ReadonlyMap<number, number>): Promise<{ strokes: number; spaces: number; unplaced: number }>;
@@ -983,7 +983,7 @@ Settings (`settings.ts`, pure + tested) are split:
   default export style (`defaultExportStyle`, themed) and document style font (`docExportFont`, serif),
   `settingsVersion` (2). Migration to v2 (once, then saved): `doubleTapEraser` → false and a hold
   delay of exactly 450 ms (the old default) → 500 ms.
-- **Per device** (`app.saveLocalStorage("pencil-layer:device")`, fallback `window.localStorage`):
+- **Per device** (`app.saveLocalStorage("ink-pages:device")`, fallback `window.localStorage`):
   toolbar visible (default **shown** everywhere since Stage F — the slim Select bar on desktop; before it the
   desktop default was hidden), toolbar position (null = bottom-center),
   docked edge (bottom) and collapsed state, mouse draws (desktop only), and the Stage E tool options:
@@ -1127,7 +1127,7 @@ src/exportPdf.ts       Stage H: one-shot export commands/menu runner (watches Ob
 src/docStyle.ts        Document-style PDF export: styles, fonts, labels, ink y-scale (pure, tested)
 src/spaces.ts          Stage K: drawing spaces — block placement, ink → space, growth/resize, Make drawing space, reading placement (pure, tested)
 src/inkCopy.ts         Public API: ink lines of a note, copy ink to a reorganized note (pure, tested)
-src/api.ts             Public API (`plugin.api`, type PencilLayerApi): Obsidian glue over inkCopy + store
+src/api.ts             Public API (`plugin.api`, type InkPagesApi): Obsidian glue over inkCopy + store
 src/inkDrawings.ts     Public API: split ink into drawings (spaces, clustered margin ink) + layout (pure, tested)
 src/drawingPng.ts      Public API: render one drawing to a base64 PNG (DOM canvas)
 src/spaceView.ts       Stage K: space block widgets (StateField), layout lookup, ⋯ menu + resize handle

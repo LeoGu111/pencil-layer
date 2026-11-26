@@ -1,4 +1,4 @@
-# Pencil Layer auf dem iPad
+# Ink Pages auf dem iPad
 
 Das Projekt baut auf dem [Obsidian-Plugin Pencil Layer](https://github.com/standw7/pencil-layer) auf. Ziel ist ein flüssiger Wechsel zwischen Markdown und Apple Pencil, etwa bei handschriftlichen Nebenrechnungen und technischen Skizzen. Beim PDF-Export sollen Text und Zeichnungen auf den vorgesehenen Seiten und an den erwarteten Positionen erscheinen.
 
@@ -8,7 +8,7 @@ Das Projekt baut auf dem [Obsidian-Plugin Pencil Layer](https://github.com/stand
 
 - [Pencil-Gesten](https://github.com/LeoGu111/Notify/blob/main/src/renderer/editor/pencilGestures.ts) und [PDF-Seitenansicht](https://github.com/LeoGu111/Notify/blob/main/src/renderer/components/PdfPage.tsx) für Stift, Finger und Gestenabbruch.
 - [Strichglättung](https://github.com/LeoGu111/Notify/blob/main/src/renderer/editor/strokeStabilization.ts) und [Druckverarbeitung](https://github.com/LeoGu111/Notify/blob/main/src/renderer/editor/pressureInk.ts) für das Schreibgefühl.
-- [PDF-Export](https://github.com/LeoGu111/Notify/blob/main/src/renderer/editor/exportPdf.ts) für die Übertragung der Zeichnungen in die Ausgabe. Notify arbeitet mit festen PDF-Seiten. Pencil Layer muss zusätzlich mit Zeilenumbruch und dem Layout von Obsidian umgehen.
+- [PDF-Export](https://github.com/LeoGu111/Notify/blob/main/src/renderer/editor/exportPdf.ts) für die Übertragung der Zeichnungen in die Ausgabe. Notify arbeitet mit festen PDF-Seiten. Ink Pages muss zusätzlich mit Zeilenumbruch und dem Layout von Obsidian umgehen.
 - [Schreibtest im Browser](https://github.com/LeoGu111/Notify/blob/main/scripts/writing-browser-check.tsx) als Vorlage für reproduzierbare Prüfungen.
 
 ## Erster Arbeitsschritt

@@ -129,7 +129,7 @@ export async function recognizeMathStrokes(
 			const out = effectiveProvider === "gemini" ? await callGemini(png, key, model) : await callOpenAI(png, key);
 			if (out) return { tex: out, usedVision: true };
 		} catch (err) {
-			console.warn("[pencil-layer] Vision LaTeX request failed, falling back to offline recognizer", err);
+			console.warn("[ink-pages] Vision LaTeX request failed, falling back to offline recognizer", err);
 			new Notice("Gemini/Vision API fehlgeschlagen — Offline-Erkennung wird genutzt.");
 		}
 	}

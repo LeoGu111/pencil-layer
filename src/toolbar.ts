@@ -193,7 +193,7 @@ export class InkToolbar {
 	) {
 		this.leafEl = view.containerEl;
 		this.leafEl.addClass("pl-has-float");
-		this.el = this.leafEl.createDiv({ cls: "pencil-layer-toolbar" });
+		this.el = this.leafEl.createDiv({ cls: "ink-pages-toolbar" });
 
 		// Keep editor focus/cursor: a press anywhere on the toolbar or its popover never moves focus.
 		const keepFocus = (e: Event) => e.preventDefault();
@@ -366,7 +366,7 @@ export class InkToolbar {
 		this.endDragGuards();
 		this.closePopover();
 		this.el.remove();
-		if (!this.leafEl.querySelector(":scope > .pencil-layer-toolbar")) this.leafEl.removeClass("pl-has-float");
+		if (!this.leafEl.querySelector(":scope > .ink-pages-toolbar")) this.leafEl.removeClass("pl-has-float");
 	}
 
 	// -------------------------------------------------------------------------------------------

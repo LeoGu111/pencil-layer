@@ -143,7 +143,7 @@ export function refindChar(srcLines: readonly string[], srcCharLine: number, cha
 /**
  * Copy all ink of a source note (`src`, text `srcText`) for a destination note with text `dstText`.
  * `lineMap`: source line (as returned by `inkLinesOf`) → destination line. See the module docs and
- * `PencilLayerApi.copyInk`. `makeId` is injectable for tests. The source ink is not modified.
+ * `InkPagesApi.copyInk`. `makeId` is injectable for tests. The source ink is not modified.
  */
 export function copyInkData(
 	src: InkFile,

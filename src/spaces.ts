@@ -369,7 +369,7 @@ export function enterOpensBelow(text: string): boolean {
  * a note (while the plugin's space clip is set) pastes the drawing space instead; pasted anywhere
  * else it is a readable label.
  */
-export const SPACE_CLIP_TEXT = "[Pencil Layer drawing]";
+export const SPACE_CLIP_TEXT = "[Ink Pages drawing]";
 
 export function isSpaceClipText(text: string | null | undefined): boolean {
 	return !!text && text.trim() === SPACE_CLIP_TEXT;
