@@ -1,5 +1,5 @@
 import { EditorState } from "@codemirror/state";
-import type { EditorView } from "@codemirror/view";
+import type { EditorView, ViewUpdate } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InkView, type InkHost } from "../src/inkView";
 import { emptyInk, type Stroke } from "../src/model";
@@ -467,5 +467,155 @@ describe("free drawing without Ink spaces", () => {
 		expect(created.pos).toBe(doc.line(11).from);
 		expect(created.points[0][0]).toBeCloseTo(30, 5);
 		expect(created.points[0][1]).toBeCloseTo(5, 5);
+	});
+
+	it("scales page guide visible width into unzoomed layout coordinates under zoom and resets zoom when switching notes", () => {
+		const docA = EditorState.create({ doc: "Note A" }).doc;
+		const docB = EditorState.create({ doc: "Note B" }).doc;
+		let currentPath = "NoteA.md";
+		let currentDoc = docA;
+		const elements: TestElement[] = [];
+		let pendingMeasure: { read: (v: EditorView) => unknown; write: (v: unknown) => void } | null = null;
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+		vi.stubGlobal("window", { setTimeout, clearTimeout, requestAnimationFrame: vi.fn(() => 1), cancelAnimationFrame: vi.fn() });
+		vi.stubGlobal("getComputedStyle", () => ({
+			paddingLeft: "0",
+			paddingRight: "0",
+			paddingTop: "0",
+			borderLeftWidth: "0",
+			borderTopWidth: "0",
+			borderRightWidth: "0",
+		}));
+		vi.stubGlobal("activeDocument", {
+			createElementNS: () => {
+				const el = Object.assign(new TestElement(), { textContent: "" });
+				elements.push(el);
+				return el;
+			},
+		});
+		const scrollDOM = Object.assign(new TestElement(), {
+			scrollLeft: 0,
+			scrollTop: 0,
+			clientWidth: 800,
+			clientHeight: 900,
+			offsetWidth: 800,
+			offsetHeight: 900,
+			setPointerCapture: vi.fn(),
+			hasPointerCapture: vi.fn(() => true),
+			releasePointerCapture: vi.fn(),
+			getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 900, bottom: 900 }),
+		});
+		let currentZoom = 1;
+		const contentDOM = Object.assign(new TestElement(), {
+			clientWidth: 700,
+			offsetWidth: 700,
+			offsetHeight: 1200,
+			contains: () => false,
+			getBoundingClientRect: () => ({
+				left: 40 * currentZoom,
+				top: 0,
+				width: 700 * currentZoom,
+				height: 1200 * currentZoom,
+				bottom: 1200 * currentZoom,
+			}),
+		});
+		const sizer = Object.assign(new TestElement(), {
+			offsetLeft: 0,
+			offsetTop: 0,
+			offsetWidth: 780,
+			offsetHeight: 1200,
+			classList: Object.assign(new Set<string>(["cm-sizer"]), {
+				add: vi.fn(),
+				remove: vi.fn(),
+				toggle: vi.fn(),
+				contains: (c: string) => c === "cm-sizer",
+			}),
+			getBoundingClientRect: () => ({ left: 0, top: 0, width: 780 * currentZoom, height: 1200 * currentZoom }),
+		});
+		Object.assign(scrollDOM, { children: [sizer] });
+		const view = {
+			scrollDOM,
+			contentDOM,
+			state: {
+				get doc() {
+					return currentDoc;
+				},
+				selection: EditorState.create({ doc: "Note A" }).selection,
+				field: (field: unknown) => (field === undefined ? { file: { extension: "md", path: currentPath } } : undefined),
+			},
+			scaleX: 1,
+			scaleY: 1,
+			documentTop: 0,
+			contentHeight: 1200,
+			defaultLineHeight: 24,
+			viewport: { from: 0, to: 6 },
+			lineBlockAt: () => ({ from: 0, top: 0, bottom: 24 }),
+			lineBlockAtHeight: () => ({ from: 0, top: 0, bottom: 24 }),
+			requestMeasure: vi.fn((spec: { read: (v: EditorView) => unknown; write: (v: unknown) => void }) => {
+				pendingMeasure = spec;
+			}),
+		};
+		const host = {
+			store: {
+				subscribe: vi.fn(() => () => {}),
+				load: () => new Promise(() => {}),
+				isLoaded: () => true,
+				get: emptyInk,
+				allStrokes: () => [],
+				setContentWidth: vi.fn(),
+			},
+			getSettings: () => ({ ...DEFAULT_SYNCED, ...defaultLocal(true), pageGuide: "A4" as const }),
+			registerInkView: vi.fn(),
+			isRenaming: () => false,
+			penSeen: vi.fn(),
+			deskSelect: () => null,
+			selectionToolActive: () => false,
+		};
+		const ink = new InkView(view as unknown as EditorView, host as unknown as InkHost);
+		const gGuides = elements[1];
+		const guideChildren: TestElement[] = [];
+		gGuides.appendChild.mockImplementation((el: TestElement) => {
+			guideChildren.push(el);
+			return el;
+		});
+		gGuides.replaceChildren.mockImplementation(() => {
+			guideChildren.length = 0;
+		});
+
+		// Zoom to 2x: viewport is 800 screen px = 400 unzoomed sizer px; geo.left = 40 -> visible sheet width = 360.
+		currentZoom = 2;
+		ink.setZoom(2);
+		pendingMeasure!.write(pendingMeasure!.read(view as unknown as EditorView));
+		const endLabelAt2x = guideChildren.find((c) => (c as unknown as { textContent?: string }).textContent?.includes("Ende Seite 1"));
+		expect(endLabelAt2x).toBeDefined();
+		const labelXCalls2x = endLabelAt2x!.setAttribute.mock.calls.filter(([k]) => k === "x").map(([, v]) => Number(v));
+		// Must be placed inside the 360px visible unzoomed width (~352), NOT at 710 (which assumed 800 unzoomed px).
+		expect(labelXCalls2x[labelXCalls2x.length - 1]).toBeLessThan(360);
+
+		// Zoom out to 0.5x: viewport is 800 screen px = 1600 unzoomed sizer px -> right shade must extend past paperRight (~756) to 1560.
+		currentZoom = 0.5;
+		ink.setZoom(0.5);
+		pendingMeasure!.write(pendingMeasure!.read(view as unknown as EditorView));
+		const rightShade = guideChildren.find((c) =>
+			c.setAttribute.mock.calls.some(([k, v]) => k === "x" && Number(v) > 700),
+		);
+		expect(rightShade).toBeDefined();
+		const shadeWidth = Number(rightShade!.setAttribute.mock.calls.find(([k]) => k === "width")![1]);
+		expect(shadeWidth).toBeGreaterThan(700);
+
+		// Switching to another note inside the same InkView must reset zoom back to 100%.
+		currentPath = "NoteB.md";
+		currentDoc = docB;
+		currentZoom = 1;
+		ink.update({
+			docChanged: true,
+			geometryChanged: false,
+			viewportChanged: false,
+			heightChanged: false,
+			selectionSet: false,
+			startState: { doc: docA },
+			changes: { iterChangedRanges: (fn: (a: number, b: number) => void) => fn(0, docA.length) },
+		} as unknown as ViewUpdate);
+		expect(ink.getZoom()).toBe(1);
 	});
 });
