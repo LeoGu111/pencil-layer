@@ -465,6 +465,8 @@ export class InkView implements PluginValue {
 		| null = null;
 	private readonly guideTouches = new Map<number, XY>();
 	private guidePinchStart: { origin: XY; angle: number; radius: number; a: XY; b: XY; idA: number; idB: number } | null = null;
+	/** Transient angle/radius while rotating/resizing a guide; persisted once on pointer end. */
+	private guideDraft: { rulerAngle?: number; setSquareAngle?: number; compassRadius?: number } | null = null;
 	/** Dynamic extra blank pages so empty/short notes can always be scrolled down cleanly. */
 	private extraPages = 2;
 	private lastBottomPad = -1;
@@ -657,6 +659,10 @@ export class InkView implements PluginValue {
 		if (this.raf) window.cancelAnimationFrame(this.raf);
 		if (this.switchTimer !== null) window.clearTimeout(this.switchTimer);
 		this.cancelActive();
+		this.guideDraft = null;
+		this.guideDrag = null;
+		this.guidePinchStart = null;
+		this.guideTouches.clear();
 		this.detach();
 		this.svg.remove();
 		this.menuEl?.remove();
@@ -939,8 +945,13 @@ export class InkView implements PluginValue {
 				}
 				const geo = this.readGeometry(view);
 				const { ruler, setSquare, compass } = this.host.getSettings();
-				if (!ruler && !setSquare && !compass) this.guideOrigin = null;
-				else if (!this.guideOrigin) {
+				if (!ruler && !setSquare && !compass) {
+					this.guideOrigin = null;
+					this.guideDraft = null;
+					this.guideDrag = null;
+					this.guidePinchStart = null;
+					this.guideTouches.clear();
+				} else if (!this.guideOrigin) {
 					const scroller = view.scrollDOM;
 					const sy = this.effectiveScaleY();
 					const visTop = Math.max(0, scroller.scrollTop / sy - geo.top);
@@ -1379,6 +1390,25 @@ export class InkView implements PluginValue {
 	// Drawing guides (Straight ruler, Set square, Compass) + Page boundaries
 	// -------------------------------------------------------------------------------------------
 
+	private guideRulerAngle(settings: InkSettings): number {
+		return this.guideDraft?.rulerAngle ?? settings.rulerAngle;
+	}
+
+	private guideSetSquareAngle(settings: InkSettings): number {
+		return this.guideDraft?.setSquareAngle ?? settings.setSquareAngle;
+	}
+
+	private guideCompassRadius(settings: InkSettings): number {
+		return this.guideDraft?.compassRadius ?? settings.compassRadius;
+	}
+
+	private commitGuideDraft(): void {
+		const draft = this.guideDraft;
+		if (!draft) return;
+		this.guideDraft = null;
+		this.host.updateSettings?.(draft);
+	}
+
 	private guideHalfSize(): number {
 		return Math.max(90, Math.min(180, (this.geo?.width ?? 480) * 0.36));
 	}
@@ -1386,8 +1416,8 @@ export class InkView implements PluginValue {
 	private guideEdges(): GuideEdge[] {
 		const settings = this.host.getSettings();
 		if (!this.guideOrigin) return [];
-		if (settings.ruler) return rulerGeometry(this.guideOrigin, settings.rulerAngle, RULER_HALF_LENGTH, RULER_HALF_THICKNESS).edges;
-		if (settings.setSquare) return setSquareEdges(this.guideOrigin, settings.setSquareAngle, this.guideHalfSize());
+		if (settings.ruler) return rulerGeometry(this.guideOrigin, this.guideRulerAngle(settings), RULER_HALF_LENGTH, RULER_HALF_THICKNESS).edges;
+		if (settings.setSquare) return setSquareEdges(this.guideOrigin, this.guideSetSquareAngle(settings), this.guideHalfSize());
 		return [];
 	}
 
@@ -1499,7 +1529,7 @@ export class InkView implements PluginValue {
 
 		if (activeKind === "compass") {
 			const [x, y] = origin;
-			const r = settings.compassRadius;
+			const r = this.guideCompassRadius(settings);
 			this.guideOutline.setAttribute("d", `M ${x - r} ${y} a ${r} ${r} 0 0 1 ${2 * r} 0 a ${r} ${r} 0 0 1 ${-2 * r} 0 Z M ${x} ${y} h ${r}`);
 			let ticks = "";
 			for (let i = 0; i < 24; i++) {
@@ -1525,9 +1555,10 @@ export class InkView implements PluginValue {
 		}
 
 		if (activeKind === "ruler") {
-			const geom = rulerGeometry(origin, settings.rulerAngle, RULER_HALF_LENGTH, RULER_HALF_THICKNESS);
+			const rulerAngle = this.guideRulerAngle(settings);
+			const geom = rulerGeometry(origin, rulerAngle, RULER_HALF_LENGTH, RULER_HALF_THICKNESS);
 			const [tl, tr, br, bl] = geom.corners;
-			const rad = (settings.rulerAngle * Math.PI) / 180;
+			const rad = (rulerAngle * Math.PI) / 180;
 			const cos = Math.cos(rad);
 			const sin = Math.sin(rad);
 			const pt = (lx: number, ly: number): XY => [origin[0] + lx * cos - ly * sin, origin[1] + lx * sin + ly * cos];
@@ -1555,7 +1586,7 @@ export class InkView implements PluginValue {
 					num.setAttribute("x", lp[0].toFixed(1));
 					num.setAttribute("y", lp[1].toFixed(1));
 					num.setAttribute("text-anchor", "middle");
-					num.setAttribute("transform", `rotate(${settings.rulerAngle} ${lp[0].toFixed(1)} ${lp[1].toFixed(1)})`);
+					num.setAttribute("transform", `rotate(${rulerAngle} ${lp[0].toFixed(1)} ${lp[1].toFixed(1)})`);
 					num.textContent = String(mm / 10);
 					this.guideLabels.appendChild(num);
 				}
@@ -1567,8 +1598,8 @@ export class InkView implements PluginValue {
 			angleText.setAttribute("x", anglePos[0].toFixed(1));
 			angleText.setAttribute("y", anglePos[1].toFixed(1));
 			angleText.setAttribute("text-anchor", "middle");
-			angleText.setAttribute("transform", `rotate(${settings.rulerAngle} ${anglePos[0].toFixed(1)} ${anglePos[1].toFixed(1)})`);
-			angleText.textContent = `${Math.round(settings.rulerAngle)}°`;
+			angleText.setAttribute("transform", `rotate(${rulerAngle} ${anglePos[0].toFixed(1)} ${anglePos[1].toFixed(1)})`);
+			angleText.textContent = `${Math.round(rulerAngle)}°`;
 			this.guideLabels.appendChild(angleText);
 
 			const movePos = pt(-RULER_HALF_LENGTH + 26, 0);
@@ -1585,8 +1616,9 @@ export class InkView implements PluginValue {
 		}
 
 		// Set square (Geodreieck)
+		const setSquareAngle = this.guideSetSquareAngle(settings);
 		const half = this.guideHalfSize();
-		const edges = setSquareEdges(origin, settings.setSquareAngle, half);
+		const edges = setSquareEdges(origin, setSquareAngle, half);
 		const [a, b, c] = edges.map(([from]) => from);
 		const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
 		const dx = (b[0] - a[0]) / length;
@@ -1608,7 +1640,7 @@ export class InkView implements PluginValue {
 				num.setAttribute("x", lx.toFixed(1));
 				num.setAttribute("y", ly.toFixed(1));
 				num.setAttribute("text-anchor", "middle");
-				num.setAttribute("transform", `rotate(${settings.setSquareAngle} ${lx.toFixed(1)} ${ly.toFixed(1)})`);
+				num.setAttribute("transform", `rotate(${setSquareAngle} ${lx.toFixed(1)} ${ly.toFixed(1)})`);
 				num.textContent = String(mm / 10);
 				this.guideLabels.appendChild(num);
 			}
@@ -1625,7 +1657,7 @@ export class InkView implements PluginValue {
 		badge.setAttribute("x", String(cx));
 		badge.setAttribute("y", String(cy - 20));
 		badge.setAttribute("text-anchor", "middle");
-		badge.textContent = `${Math.round(settings.setSquareAngle)}°`;
+		badge.textContent = `${Math.round(setSquareAngle)}°`;
 		this.guideLabels.appendChild(badge);
 		addActionBtn(this.guideResetBtn, c[0] - 24, c[1] + 18, "0°", "Geodreieck auf 0° setzen");
 		addActionBtn(this.guideCloseBtn, c[0] + 24, c[1] + 18, "×", "Geodreieck schließen");
@@ -1649,11 +1681,11 @@ export class InkView implements PluginValue {
 		if (this.guideTouches.size === 2) {
 			const entries = [...this.guideTouches.entries()];
 			const s = this.host.getSettings();
-			const angle = s.ruler ? s.rulerAngle : s.setSquareAngle;
+			const angle = s.ruler ? this.guideRulerAngle(s) : this.guideSetSquareAngle(s);
 			this.guidePinchStart = {
 				origin: [...this.guideOrigin] as XY,
 				angle,
-				radius: s.compassRadius,
+				radius: this.guideCompassRadius(s),
 				idA: entries[0][0],
 				a: entries[0][1],
 				idB: entries[1][0],
@@ -1681,7 +1713,7 @@ export class InkView implements PluginValue {
 			return;
 		}
 		const startPointerAngle = (Math.atan2(y - this.guideOrigin[1], x - this.guideOrigin[0]) * 180) / Math.PI;
-		const startAngle = s.ruler ? s.rulerAngle : s.setSquareAngle;
+		const startAngle = s.ruler ? this.guideRulerAngle(s) : this.guideSetSquareAngle(s);
 		this.guideDrag = { mode: "rotate", id: event.pointerId, startAngle, startPointerAngle };
 	};
 
@@ -1701,11 +1733,11 @@ export class InkView implements PluginValue {
 				const tf = twoFingerGuideTransform(p.origin, p.angle, p.a, p.b, curA, curB, 3);
 				this.guideOrigin = tf.origin;
 				const s = this.host.getSettings();
-				if (s.ruler) this.host.updateSettings?.({ rulerAngle: tf.angle });
-				else if (s.setSquare) this.host.updateSettings?.({ setSquareAngle: tf.angle });
+				if (s.ruler) this.guideDraft = { rulerAngle: tf.angle };
+				else if (s.setSquare) this.guideDraft = { setSquareAngle: tf.angle };
 				else if (s.compass) {
 					const nextR = Math.max(40, Math.min(200, Math.round(p.radius * tf.scaleRatio)));
-					this.host.updateSettings?.({ compassRadius: nextR });
+					this.guideDraft = { compassRadius: nextR };
 				}
 				this.renderGuide();
 			}
@@ -1722,27 +1754,33 @@ export class InkView implements PluginValue {
 		} else if (drag.mode === "rotate") {
 			const curAng = (Math.atan2(y - this.guideOrigin[1], x - this.guideOrigin[0]) * 180) / Math.PI;
 			const nextAng = snapGuideAngle(drag.startAngle + (curAng - drag.startPointerAngle), 3);
-			if (s.ruler) this.host.updateSettings?.({ rulerAngle: nextAng });
-			else if (s.setSquare) this.host.updateSettings?.({ setSquareAngle: nextAng });
+			if (s.ruler) this.guideDraft = { rulerAngle: nextAng };
+			else if (s.setSquare) this.guideDraft = { setSquareAngle: nextAng };
 			this.renderGuide();
 		} else if (drag.mode === "radius") {
 			const nextR = Math.max(40, Math.min(200, Math.round(Math.hypot(x - this.guideOrigin[0], y - this.guideOrigin[1]))));
-			this.host.updateSettings?.({ compassRadius: nextR });
+			this.guideDraft = { compassRadius: nextR };
 			this.renderGuide();
 		}
 	};
 
 	private readonly onGuideEnd = (event: PointerEvent): void => {
+		const wasPinching = this.guidePinchStart !== null;
+		const wasDragging = this.guideDrag?.id === event.pointerId;
 		this.guideTouches.delete(event.pointerId);
 		if (this.guideTouches.size < 2) this.guidePinchStart = null;
-		if (this.guideDrag?.id === event.pointerId) this.guideDrag = null;
+		if (wasDragging) this.guideDrag = null;
+		if ((wasPinching && !this.guidePinchStart) || (wasDragging && !this.guideDrag)) {
+			this.commitGuideDraft();
+		}
 	};
 
 	private readonly onGuideResetDown = (event: PointerEvent): void => {
 		event.preventDefault();
 		event.stopPropagation();
+		this.guideDraft = null;
 		const s = this.host.getSettings();
-		if (s.ruler) this.host.updateSettings?.({ rulerAngle: s.rulerAngle === 0 ? 90 : 0 });
+		if (s.ruler) this.host.updateSettings?.({ rulerAngle: 0 });
 		else if (s.setSquare) this.host.updateSettings?.({ setSquareAngle: 0 });
 		else if (s.compass) this.host.updateSettings?.({ compassRadius: 100 });
 	};
@@ -1750,6 +1788,10 @@ export class InkView implements PluginValue {
 	private readonly onGuideCloseDown = (event: PointerEvent): void => {
 		event.preventDefault();
 		event.stopPropagation();
+		this.guideDraft = null;
+		this.guideDrag = null;
+		this.guidePinchStart = null;
+		this.guideTouches.clear();
 		this.host.updateSettings?.({ ruler: false, setSquare: false, compass: false });
 	};
 
@@ -1956,7 +1998,7 @@ export class InkView implements PluginValue {
 		const edge = tool === "pen" && (settings.penShape === "freehand" || settings.penShape === "line")
 			? nearestGuideEdge([x, y], this.guideEdges(), 24) : null;
 		const compass = tool === "pen" && settings.penShape === "freehand" && settings.compass && this.guideOrigin
-			? startCompassDrag([x, y], this.guideOrigin, settings.compassRadius, 22) : null;
+			? startCompassDrag([x, y], this.guideOrigin, this.guideCompassRadius(settings), 22) : null;
 		const shape = edge ? "line" : tool === "pen" ? settings.penShape : "freehand";
 		const geometry: DrawGeometry | null = compass ? { kind: "compass", drag: compass } : shape === "freehand" ? null : {
 			kind: "shape", shape, start: edge ? projectToInfiniteEdge([x, y], edge) : [x, y], edge, end: null,
