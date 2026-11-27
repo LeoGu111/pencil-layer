@@ -37,6 +37,7 @@ import {
 	sanitizeFolder,
 	localOnly,
 	needsLocalMigration,
+	resolveGeminiApiKey,
 	sanitizeHoldMs,
 	sanitizeLocal,
 	sanitizeSynced,
@@ -287,7 +288,7 @@ export default class InkPagesPlugin extends Plugin implements InkHost, ToolbarHo
 		new GeminiAssistantModal(
 			this.app,
 			{
-				getApiKey: () => this.settings.geminiApiKey || this.settings.mathApiKey,
+				getApiKey: () => resolveGeminiApiKey(this.settings),
 				setApiKey: (key) => this.updateSettings({ geminiApiKey: key }),
 				getModel: () => this.settings.geminiModel,
 				setModel: (model) => this.updateSettings({ geminiModel: model }),

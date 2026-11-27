@@ -559,3 +559,27 @@ export function erasable(tool: Tool, highlighterOnly: boolean): boolean {
 export function lassoSelects(tool: Tool, filter: LassoFilter): boolean {
 	return filter === "both" || filter === tool;
 }
+
+/** Return true when `key` uses the OpenAI secret key prefix (`sk-...`). */
+export function isOpenAiApiKey(key: string): boolean {
+	return key.trim().startsWith("sk-");
+}
+
+/**
+ * Resolve the API key to use for Gemini requests (AI Assistant or Gemini Vision LaTeX).
+ * Strictly separates OpenAI keys from Gemini endpoints: `mathApiKey` is only used as a fallback
+ * when `mathProvider === "gemini"` and it does not look like an OpenAI key (`sk-...`).
+ */
+export function resolveGeminiApiKey(opts: {
+	geminiApiKey?: string;
+	mathProvider?: MathVisionProvider;
+	mathApiKey?: string;
+}): string {
+	const geminiKey = (opts.geminiApiKey ?? "").trim();
+	if (geminiKey) return geminiKey;
+	if (opts.mathProvider === "gemini") {
+		const mathKey = (opts.mathApiKey ?? "").trim();
+		if (mathKey && !isOpenAiApiKey(mathKey)) return mathKey;
+	}
+	return "";
+}
