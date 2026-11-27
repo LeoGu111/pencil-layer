@@ -130,7 +130,7 @@ export async function recognizeMathStrokes(
 			if (out) return { tex: out, usedVision: true };
 		} catch (err) {
 			console.warn("[ink-pages] Vision LaTeX request failed, falling back to offline recognizer", err);
-			new Notice("Gemini/Vision API fehlgeschlagen — Offline-Erkennung wird genutzt.");
+			new Notice("Gemini/Vision API failed — using offline recognizer.");
 		}
 	}
 	return { tex: recognizeMathFromStrokes(overlayStrokes), usedVision: false };

@@ -1,4 +1,4 @@
-import { normalizePath, TFile, TFolder, type Vault } from "obsidian";
+import { type FileManager, normalizePath, TFile, TFolder, type Vault } from "obsidian";
 import type { InkAdapter } from "./store";
 
 /**
@@ -13,7 +13,10 @@ import type { InkAdapter } from "./store";
  * (e.g. a sidecar that just arrived from Sync and hasn't been indexed).
  */
 export class VaultInkAdapter implements InkAdapter {
-	constructor(private readonly vault: Vault) {}
+	constructor(
+		private readonly vault: Vault,
+		private readonly fileManager: FileManager,
+	) {}
 
 	private file(path: string): TFile | null {
 		const f = this.vault.getAbstractFileByPath(normalizePath(path));
@@ -50,7 +53,7 @@ export class VaultInkAdapter implements InkAdapter {
 	async remove(path: string): Promise<void> {
 		const p = normalizePath(path);
 		const f = this.file(p);
-		if (f) await this.vault.delete(f);
+		if (f) await this.fileManager.trashFile(f);
 		else if (await this.vault.adapter.exists(p)) await this.vault.adapter.remove(p);
 	}
 

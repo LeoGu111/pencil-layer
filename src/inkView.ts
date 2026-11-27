@@ -1355,7 +1355,7 @@ export class InkView implements PluginValue {
 		const leaf = this.view.scrollDOM.closest?.<HTMLElement>(".workspace-leaf-content") ?? null;
 		if (!leaf || typeof leaf.createDiv !== "function") return;
 		if (!this.zoomBadge || !this.zoomBadge.isConnected) {
-			const b = leaf.createDiv({ cls: "pl-zoom-badge", attr: { role: "button", "aria-label": "Zoom auf 100% zurücksetzen" } });
+			const b = leaf.createDiv({ cls: "pl-zoom-badge", attr: { role: "button", "aria-label": "Reset zoom to 100%" } });
 			b.addEventListener("pointerdown", (e) => {
 				e.preventDefault();
 				e.stopPropagation();
@@ -1450,7 +1450,7 @@ export class InkView implements PluginValue {
 		const topLabel = svgEl("text", "pl-guide-label");
 		topLabel.setAttribute("x", "8");
 		topLabel.setAttribute("y", "14");
-		topLabel.textContent = `${layout.metrics.label} (${paperWCm} cm · Druckrand ${marginCm} cm) · Seite 1`;
+		topLabel.textContent = `${layout.metrics.label} (${paperWCm} cm · margin ${marginCm} cm) · Page 1`;
 		this.gGuides.appendChild(topLabel);
 
 		layout.horizontalBreaks.forEach((y, idx) => {
@@ -1460,13 +1460,13 @@ export class InkView implements PluginValue {
 			label.setAttribute("x", String(layout.labelRightX));
 			label.setAttribute("y", String(Math.max(14, y - 6)));
 			label.setAttribute("text-anchor", "end");
-			label.textContent = `${layout.metrics.label} · Ende Seite ${idx + 1}`;
+			label.textContent = `${layout.metrics.label} · End of page ${idx + 1}`;
 			this.gGuides.appendChild(label);
 
 			const nextLabel = svgEl("text", "pl-guide-label");
 			nextLabel.setAttribute("x", "8");
 			nextLabel.setAttribute("y", String(y + 15));
-			nextLabel.textContent = `${layout.metrics.label} · Seite ${idx + 2}`;
+			nextLabel.textContent = `${layout.metrics.label} · Page ${idx + 2}`;
 			this.gGuides.appendChild(nextLabel);
 		});
 	}
@@ -1519,8 +1519,8 @@ export class InkView implements PluginValue {
 			badge.setAttribute("text-anchor", "middle");
 			badge.textContent = `r = ${cm} cm`;
 			this.guideLabels.appendChild(badge);
-			addActionBtn(this.guideResetBtn, x - 26, y - r - 18, "R", "Standard-Radius");
-			addActionBtn(this.guideCloseBtn, x + 26, y - r - 18, "×", "Zirkel schließen");
+			addActionBtn(this.guideResetBtn, x - 26, y - r - 18, "R", "Reset radius");
+			addActionBtn(this.guideCloseBtn, x + 26, y - r - 18, "×", "Close compass");
 			return;
 		}
 
@@ -1579,8 +1579,8 @@ export class InkView implements PluginValue {
 
 			const resetPos = pt(-52, RULER_HALF_THICKNESS + 18);
 			const closePos = pt(52, RULER_HALF_THICKNESS + 18);
-			addActionBtn(this.guideResetBtn, resetPos[0], resetPos[1], "0°", "Winkel auf 0° setzen");
-			addActionBtn(this.guideCloseBtn, closePos[0], closePos[1], "×", "Lineal schließen");
+			addActionBtn(this.guideResetBtn, resetPos[0], resetPos[1], "0°", "Reset angle to 0°");
+			addActionBtn(this.guideCloseBtn, closePos[0], closePos[1], "×", "Close ruler");
 			return;
 		}
 
@@ -1627,8 +1627,8 @@ export class InkView implements PluginValue {
 		badge.setAttribute("text-anchor", "middle");
 		badge.textContent = `${Math.round(settings.setSquareAngle)}°`;
 		this.guideLabels.appendChild(badge);
-		addActionBtn(this.guideResetBtn, c[0] - 24, c[1] + 18, "0°", "Geodreieck auf 0° setzen");
-		addActionBtn(this.guideCloseBtn, c[0] + 24, c[1] + 18, "×", "Geodreieck schließen");
+		addActionBtn(this.guideResetBtn, c[0] - 24, c[1] + 18, "0°", "Reset set square to 0°");
+		addActionBtn(this.guideCloseBtn, c[0] + 24, c[1] + 18, "×", "Close set square");
 	}
 
 	private readonly onGuideDown = (event: PointerEvent): void => {
@@ -3484,7 +3484,7 @@ export class InkView implements PluginValue {
 		this.menuItem(el, "palette", "Color", () => this.setColorsOpen(true), "pl-menu-sub");
 		this.menuItem(el, "fx", "To LaTeX", () => void this.convertSelectionToLatex());
 		if (this.host.openAssistant) {
-			this.menuItem(el, "sparkles", "Frag KI", () => this.askGeminiOnSelection());
+			this.menuItem(el, "sparkles", "Ask AI", () => this.askGeminiOnSelection());
 		}
 		this.menuItem(el, "camera", "Screenshot", () => this.screenshotSelection());
 	}
@@ -3653,7 +3653,7 @@ export class InkView implements PluginValue {
 			cls: "pl-math-input",
 			type: "text",
 			value: pending.rawTex,
-			attr: { "aria-label": "Erkannte LaTeX-Formel bearbeiten" },
+			attr: { "aria-label": "Edit recognized LaTeX formula" },
 		});
 		input.addEventListener("keydown", (e) => {
 			if (e.key === "Enter") {
@@ -3664,7 +3664,7 @@ export class InkView implements PluginValue {
 				this.clearMathBar();
 			}
 		});
-		const insertBtn = bar.createEl("button", { cls: "mod-cta pl-math-btn", text: "Einfügen" });
+		const insertBtn = bar.createEl("button", { cls: "mod-cta pl-math-btn", text: "Insert" });
 		onTap(insertBtn, () => this.commitPendingMath(input.value));
 		if (this.host.openAssistant) {
 			const geminiBtn = bar.createEl("button", { cls: "pl-math-btn", text: "Gemini" });
@@ -3672,10 +3672,10 @@ export class InkView implements PluginValue {
 				const ink = this.store.get(pending.path);
 				const ids = new Set(pending.strokeIds);
 				const src = (ink?.strokes ?? []).filter((s) => ids.has(s.id));
-				if (src.length > 0) this.openGeminiForStrokes(src, "Wandle diese handschriftliche Formel in sauberes Obsidian-LaTeX ($...$ / $$...$$) um.");
+				if (src.length > 0) this.openGeminiForStrokes(src, "Convert this handwritten formula into clean Obsidian LaTeX ($...$ / $$...$$).");
 			});
 		}
-		const cancelBtn = bar.createEl("button", { cls: "pl-math-btn", text: "Behalten" });
+		const cancelBtn = bar.createEl("button", { cls: "pl-math-btn", text: "Keep ink" });
 		onTap(cancelBtn, () => this.clearMathBar());
 	}
 
@@ -3686,7 +3686,7 @@ export class InkView implements PluginValue {
 		const settings = this.host.getSettings();
 		const formatted = formatLatexFormula(rawTex, settings.mathDelimiters);
 		if (!formatted) {
-			new Notice("Leere Formel — Handschrift wurde behalten.");
+			new Notice("Empty formula — handwriting kept.");
 			return false;
 		}
 		const ink = this.store.get(pending.path);
@@ -3721,7 +3721,7 @@ export class InkView implements PluginValue {
 			selection: { anchor: from + insert.length },
 			userEvent: "input",
 		});
-		new Notice(`LaTeX eingefügt: ${formatted}`, 2500);
+		new Notice(`LaTeX inserted: ${formatted}`, 2500);
 		return true;
 	}
 
@@ -3830,7 +3830,7 @@ export class InkView implements PluginValue {
 		const bar = this.ensureMathBar();
 		if (bar) {
 			bar.empty();
-			bar.createSpan({ cls: "pl-math-status", text: "Formel wird erkannt…" });
+			bar.createSpan({ cls: "pl-math-status", text: "Recognizing formula…" });
 		}
 		const { tex: rawTex, usedVision } = await recognizeMathStrokes(overlayStrokes, box, {
 			provider: settings.mathProvider,
@@ -3841,7 +3841,7 @@ export class InkView implements PluginValue {
 		if (this.destroyed || this.path !== path || !this.store.isLoaded(path)) return false;
 		if (!rawTex.trim()) {
 			this.clearMathBar();
-			new Notice("Keine Formel erkannt — tippe auf das Lasso-Menü oder hinterlege einen Gemini API-Key für handschriftliche Formeln.");
+			new Notice("No formula recognized — use the lasso menu or set a Gemini API key for handwritten formulas.");
 			return false;
 		}
 		this.showMathConfirmBar(

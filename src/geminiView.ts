@@ -16,7 +16,7 @@ export class GeminiWebView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return "Gemini (Google-Konto)";
+		return "Gemini (Google account)";
 	}
 
 	getIcon(): string {
@@ -29,8 +29,8 @@ export class GeminiWebView extends ItemView {
 		container.addClass("pl-gemini-view");
 
 		const header = container.createDiv({ cls: "pl-gemini-bar" });
-		header.createSpan({ cls: "pl-gemini-title", text: "Google Gemini (Konto)" });
-		const extBtn = header.createEl("button", { text: "Im Browser ↗" });
+		header.createSpan({ cls: "pl-gemini-title", text: "Google Gemini (account)" });
+		const extBtn = header.createEl("button", { text: "Open in browser ↗" });
 		extBtn.addEventListener("click", () => window.open(GEMINI_WEB_URL, "_blank", "noopener"));
 
 		if (Platform.isDesktopApp) {
@@ -43,7 +43,7 @@ export class GeminiWebView extends ItemView {
 					allowpopups: "true",
 				},
 			});
-			const reloadBtn = header.createEl("button", { text: "Neu laden" });
+			const reloadBtn = header.createEl("button", { text: "Reload" });
 			reloadBtn.addEventListener("click", () => {
 				const wv = webview as HTMLElement & { reload?: () => void };
 				wv.reload?.();
@@ -51,12 +51,12 @@ export class GeminiWebView extends ItemView {
 		} else {
 			const box = container.createDiv({ cls: "pl-gemini-mobile-info" });
 			box.createEl("p", {
-				text: "Auf dem iPad blockiert Google den direkten Konto-Login innerhalb von eingebetteten App-WebViews (X-Frame-Options / iPadOS WKWebView).",
+				text: "On iPad, Google blocks direct account sign-in inside embedded app WebViews (X-Frame-Options / iPadOS WKWebView).",
 			});
 			box.createEl("p", {
-				text: "Tipp für dein Google AI Pro Abo ohne API-Key: Öffne Gemini in Safari oder der Gemini-App per iPad Split View / Slide Over neben Obsidian. Über ✨ oder Lasso → „Frag KI“ kopiert Ink Pages deine Handschrift (als Bild) bzw. Frage + Notiz mit einem Tipp zum direkten Einfügen.",
+				text: "Tip for your Google AI Pro subscription without an API key: open Gemini in Safari or the Gemini app in iPad Split View / Slide Over next to Obsidian. Using ✨ or Lasso → “Ask AI”, Ink Pages copies your handwriting (as an image) or question + note in one tap for instant pasting.",
 			});
-			const openBtn = box.createEl("button", { cls: "mod-cta", text: "Gemini (Google AI Pro) öffnen ↗" });
+			const openBtn = box.createEl("button", { cls: "mod-cta", text: "Open Gemini (Google AI Pro) ↗" });
 			openBtn.addEventListener("click", () => window.open(GEMINI_WEB_URL, "_blank", "noopener"));
 		}
 		await Promise.resolve();

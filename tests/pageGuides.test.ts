@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPageGuideLayout, computeCanvasBottomPadding, nextPageGuide, pageGuideMetrics, pageGuidePrintConfig } from "../src/pageGuides";
+import { PAGE_GUIDE_LABELS, buildPageGuideLayout, computeCanvasBottomPadding, nextPageGuide, pageGuideMetrics, pageGuidePrintConfig } from "../src/pageGuides";
 
 describe("pageGuides", () => {
 	it("computes exact PDF-matching dimensions for A4 and A3 portrait/landscape", () => {
@@ -16,6 +16,9 @@ describe("pageGuides", () => {
 		expect(a3.paperWidth).toBeGreaterThan(1100);
 		expect(a3.height).toBeGreaterThan(a4.height * 1.35);
 		expect(a4Land.width).toBeGreaterThan(a4Land.height);
+		expect(a4Land.label).toBe("A4 landscape");
+		expect(pageGuideMetrics("A3-landscape")?.label).toBe("A3 landscape");
+		expect(PAGE_GUIDE_LABELS["A4-landscape"]).toBe("A4 ↔");
 		expect(pageGuideMetrics("off")).toBeNull();
 	});
 

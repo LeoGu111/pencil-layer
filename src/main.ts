@@ -1,5 +1,21 @@
 import { VaultInkAdapter, ensureFolder } from "./vaultAdapter";
-import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile, TFolder, Vault, normalizePath } from "obsidian";
+import {
+	App,
+	MarkdownView,
+	Modal,
+	Notice,
+	Platform,
+	Plugin,
+	PluginSettingTab,
+	Setting,
+	type SettingDefinition,
+	type SettingDefinitionItem,
+	TAbstractFile,
+	TFile,
+	TFolder,
+	Vault,
+	normalizePath,
+} from "obsidian";
 import { InkStore } from "./store";
 import { InkPagesApi, createApi } from "./api";
 import { InkHost, InkView, inkExtension } from "./inkView";
@@ -7,24 +23,17 @@ import { InkToolbar, ToolbarHost } from "./toolbar";
 import type { InkClip } from "./clipboard";
 import { ScreenshotModal, ScreenshotSource } from "./screenshot";
 import { ReadingInk } from "./readingView"; // Stage D
-import type { SmoothingLevel } from "./smoothing";
 import { InkKeys } from "./inkKeys"; // [Stage F]
 import { PdfExporter } from "./exportPdf"; // [Stage H]
 import type { ExportChoice, ExportOptions } from "./exportOnce";
-import { DocFont, ExportStyle, styleExportLabel } from "./docStyle";
-import { PAGE_GUIDE_FORMATS, PAGE_GUIDE_LABELS, PageGuideFormat, nextPageGuide } from "./pageGuides";
+import { styleExportLabel } from "./docStyle";
+import { PAGE_GUIDE_FORMATS, PAGE_GUIDE_LABELS, nextPageGuide } from "./pageGuides";
 import { PENCIL_GESTURE_ACTIONS, PencilGestureAction, PencilGestureDetail, resolvePencilAction, resolvePencilGesture } from "./pencilGestures";
-import { AssistantLaunchOptions, GEMINI_MODELS, GEMINI_VIEW_TYPE, GEMINI_WEB_URL, GeminiAssistantModal, GeminiModel } from "./aiAssistant";
+import { AssistantLaunchOptions, GEMINI_MODELS, GEMINI_VIEW_TYPE, GEMINI_WEB_URL, GeminiAssistantModal } from "./aiAssistant";
 import { GeminiWebView } from "./geminiView";
 import {
 	ActiveTool,
 	DEFAULT_PEN_WIDTHS,
-	EraserMode,
-	EraserSize,
-	LassoFilter,
-	MathDelimiters,
-	MathVisionProvider,
-	PenFeel,
 	PenWidths,
 	PencilSettings,
 	DEFAULT_HOLD_MS,
@@ -96,7 +105,7 @@ export default class InkPagesPlugin extends Plugin implements InkHost, ToolbarHo
 			await this.saveData(syncedOnly(this.settings));
 		}
 		// "Ink folder" setting (default Attachments/Ink): a visible folder, because Obsidian Sync skips hidden ones.
-		this.store = new InkStore(new VaultInkAdapter(this.app.vault), { root: normalizePath(this.settings.inkFolder) });
+		this.store = new InkStore(new VaultInkAdapter(this.app.vault, this.app.fileManager), { root: normalizePath(this.settings.inkFolder) });
 
 		this.registerEditorExtension(inkExtension(this));
 		this.registerView(GEMINI_VIEW_TYPE, (leaf) => new GeminiWebView(leaf));
@@ -117,7 +126,7 @@ export default class InkPagesPlugin extends Plugin implements InkHost, ToolbarHo
 
 		this.addRibbonIcon("pencil-line", "Toggle ink toolbar", () => this.toggleToolbar());
 		this.addCommands();
-		this.addSettingTab(new PencilSettingTab(this.app, this));
+		this.addSettingTab(new InkPagesSettingTab(this.app, this));
 
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.onRename(file, oldPath)));
 		this.registerEvent(this.app.vault.on("delete", (file) => this.onDelete(file)));
@@ -329,7 +338,7 @@ export default class InkPagesPlugin extends Plugin implements InkHost, ToolbarHo
 
 	addBlankPage(view: MarkdownView): void {
 		this.inkViewOf(view)?.addBlankPage();
-		new Notice("Zusätzlicher Seitenbereich unten hinzugefügt.", 1800);
+		new Notice("Added blank page space below note.", 1800);
 	}
 
 	getZoom(view: MarkdownView): number {
@@ -579,7 +588,7 @@ export default class InkPagesPlugin extends Plugin implements InkHost, ToolbarHo
 		});
 		this.addCommand({
 			id: "toggle-ruler",
-			name: "Toggle straight ruler (Lineal)",
+			name: "Toggle straight ruler",
 			callback: () => {
 				const next = !this.settings.ruler;
 				this.updateSettings({
@@ -757,7 +766,7 @@ export default class InkPagesPlugin extends Plugin implements InkHost, ToolbarHo
 	}
 }
 
-class PencilSettingTab extends PluginSettingTab {
+class InkPagesSettingTab extends PluginSettingTab {
 	constructor(
 		app: App,
 		private readonly plugin: InkPagesPlugin,
@@ -765,309 +774,400 @@ class PencilSettingTab extends PluginSettingTab {
 		super(app, plugin);
 	}
 
+	private refreshTab(): void {
+		if (typeof this.update === "function") this.update();
+		else this.display();
+	}
+
+	override getControlValue(key: string): unknown {
+		const s = this.plugin.getSettings();
+		if (key.startsWith("penWidths.")) {
+			const sub = key.slice("penWidths.".length) as keyof PenWidths;
+			return s.penWidths[sub];
+		}
+		return s[key as keyof PencilSettings];
+	}
+
+	override setControlValue(key: string, value: unknown): void {
+		const s = this.plugin.getSettings();
+		if (key.startsWith("penWidths.")) {
+			const sub = key.slice("penWidths.".length) as keyof PenWidths;
+			const n = sanitizeWidth(value, NaN);
+			if (!Number.isNaN(n)) this.plugin.updateSettings({ penWidths: { ...s.penWidths, [sub]: n } });
+			return;
+		}
+		if (key === "shapeHoldMs") {
+			const n = sanitizeHoldMs(value, NaN);
+			if (!Number.isNaN(n)) this.plugin.updateSettings({ shapeHoldMs: n });
+			return;
+		}
+		if (key === "mathAutoDelayMs") {
+			const n = Number(value);
+			if (Number.isFinite(n)) this.plugin.updateSettings({ mathAutoDelayMs: Math.min(3500, Math.max(600, Math.round(n))) });
+			return;
+		}
+		if (key === "screenshotFolder") {
+			this.plugin.updateSettings({ screenshotFolder: sanitizeFolder(value, DEFAULT_SCREENSHOT_FOLDER) });
+			return;
+		}
+		this.plugin.updateSettings({ [key]: value });
+	}
+
+	override getSettingDefinitions(): SettingDefinitionItem[] {
+		const pageGuideOptions = Object.fromEntries(PAGE_GUIDE_FORMATS.map((f) => [f, PAGE_GUIDE_LABELS[f]]));
+		const doubleTapOptions = Object.fromEntries(
+			PENCIL_GESTURE_ACTIONS.filter((a) => a.value !== "system" && a.value !== "none").map((a) => [a.value, a.label]),
+		);
+		const squeezeOptions = Object.fromEntries(PENCIL_GESTURE_ACTIONS.map((a) => [a.value, a.label]));
+		const geminiModelOptions = Object.fromEntries(GEMINI_MODELS.map((m) => [m.value, m.label]));
+
+		return [
+			{
+				name: "Show ink toolbar on this device",
+				desc: "Floating toolbar over the note (drag it by its grip, tap the grip to collapse or expand, hold or right-click it to snap to a preset position). Stored per device (default: shown). On desktop without \"Mouse draws\" it is the slim toolbar: Undo, Redo, Select, Show/Hide ink.",
+				control: { type: "toggle", key: "toolbarVisible" },
+			},
+			{
+				name: "Show ink",
+				control: { type: "toggle", key: "inkVisible" },
+			},
+			{
+				name: "Include ink in PDF export (this device)",
+				desc: "Draw the ink in Obsidian's \"Export to PDF\". The commands \"Export to PDF with ink\" / \"without ink\" set this and start the export.",
+				control: { type: "toggle", key: "includeInkInPdf" },
+			},
+			{
+				name: "Page boundary guides (A4 / A3)",
+				desc: "Shows dashed sheet limits (right edge and page breaks) matching PDF export dimensions so drawings stay cleanly on each page.",
+				control: { type: "dropdown", key: "pageGuide", options: pageGuideOptions },
+			},
+			{
+				name: "Default export style",
+				desc: `Themed: the PDF looks like the note in Obsidian (theme, snippets). Document: a plain document look (white page, black text, 12 pt, plain headings), handy for handing in work. Used by Obsidian's own export and "Export PDF with / without ink"; the ⋯ menu also offers the other style ("${styleExportLabel("document")}" / "${styleExportLabel("themed")}") for one export.`,
+				control: { type: "dropdown", key: "defaultExportStyle", options: { themed: "Themed", document: "Document" } },
+			},
+			{
+				name: "Document style font",
+				desc: "Font of the document-style PDF export (12 pt). Serif: Times New Roman (or Times, Georgia). Sans: Calibri (or Aptos, Carlito, Arial).",
+				control: { type: "dropdown", key: "docExportFont", options: { serif: "Serif (Times New Roman)", sans: "Sans (Calibri)" } },
+			},
+			{
+				name: "Mouse draws (this device)",
+				desc: "Draw with the primary mouse button (shows the full drawing toolbar). Off: the mouse reads, and the Select tool rearranges ink. Pens always draw; fingers always scroll.",
+				visible: !Platform.isMobile,
+				control: { type: "toggle", key: "mouseDraws" },
+			},
+			{
+				name: "Pen on this device",
+				desc: "Show the full drawing toolbar (tools, colors) for a pen such as a Surface Pen, even when the mouse doesn't draw. Turns on by itself the first time a pen touches a note. Off: the slim toolbar with the mouse Select tool.",
+				visible: !Platform.isMobile,
+				control: { type: "toggle", key: "penDevice" },
+			},
+			{
+				type: "group",
+				heading: "Pen",
+				items: [
+					{
+						name: "Pen feel",
+						desc: "Ballpoint: constant width. Fountain pen: pressure and speed vary the width, soft tapered ends. Pencil: soft graphite shading with tilt. Marker: bold smooth felt-tip. Calligraphy: expressive high-contrast ribbon. Dashed is always ballpoint.",
+						control: {
+							type: "dropdown",
+							key: "penFeel",
+							options: {
+								ball: "Ballpoint",
+								notes: "Fountain pen",
+								pencil: "Pencil",
+								marker: "Marker",
+								calligraphy: "Calligraphy",
+							},
+						},
+					},
+					{
+						name: "Tilt shading",
+						desc: "Tilting the Apple Pencil widens strokes for shading (works with Ballpoint, Fountain pen, Pencil, and Highlighter).",
+						control: { type: "toggle", key: "tiltShading" },
+					},
+					{
+						name: "Smoothing",
+						desc: "Filters pen jitter and pixel steps while you write (strong when slow, almost no lag when fast). Lines are always drawn as smooth curves. Shapes are never smoothed.",
+						control: {
+							type: "dropdown",
+							key: "smoothing",
+							options: { off: "Off", light: "Light", medium: "Medium (default)", strong: "Strong" },
+						},
+					},
+					{
+						name: "Thin width (px)",
+						desc: `Default ${DEFAULT_PEN_WIDTHS.thin}. Applies to new strokes.`,
+						control: { type: "number", key: "penWidths.thin", min: 0.5, step: 0.1 },
+					},
+					{
+						name: "Dashed width (px)",
+						desc: `Default ${DEFAULT_PEN_WIDTHS.dashed}. Applies to new strokes.`,
+						control: { type: "number", key: "penWidths.dashed", min: 0.5, step: 0.1 },
+					},
+					{
+						name: "Thick width (px)",
+						desc: `Default ${DEFAULT_PEN_WIDTHS.thick}. Applies to new strokes.`,
+						control: { type: "number", key: "penWidths.thick", min: 0.5, step: 0.1 },
+					},
+				],
+			},
+			{
+				type: "group",
+				heading: "Gestures",
+				items: [
+					{
+						name: "Snap to shape",
+						desc: "Draw a line, arrow, rectangle, triangle, polygon or ellipse and keep the pen still: it snaps to a clean shape. Keep the pen down to adjust it.",
+						control: { type: "toggle", key: "shapeSnap" },
+					},
+					{
+						name: "Hold delay (ms)",
+						desc: `How long the pen must stay still before snapping. Default ${DEFAULT_HOLD_MS} (${HOLD_MS_MIN}–${HOLD_MS_MAX}).`,
+						control: { type: "number", key: "shapeHoldMs", min: HOLD_MS_MIN, max: HOLD_MS_MAX, step: 50 },
+					},
+					{
+						name: "Double-tap with the Pencil tip",
+						desc: "Tap the screen twice quickly with the Pencil tip to run the double-tap action below. Taps leave no dots, and taps beside recent handwriting are ignored.",
+						control: { type: "toggle", key: "doubleTapEraser" },
+					},
+					{
+						name: "Double-tap action",
+						desc: "Action triggered by Pencil tip double-tap (and bridged barrel double-tap if provided by the host).",
+						control: { type: "dropdown", key: "doubleTapAction", options: doubleTapOptions },
+					},
+					{
+						name: "Apple Pencil Pro squeeze action",
+						desc: "Action when a squeeze event is forwarded to the WebView. Important: Apple's iPadOS WKWebView never exposes native hardware barrel Squeeze or barrel Double-tap (UIPencilInteraction) to Obsidian JS plugins; use screen tip double-tap, toolbar buttons, or commands instead.",
+						control: { type: "dropdown", key: "squeezeAction", options: squeezeOptions },
+					},
+				],
+			},
+			{
+				type: "group",
+				heading: "Google Gemini & AI assistant (this device)",
+				items: [
+					{
+						name: "Gemini API key (this device)",
+						desc: "Note on Google AI Pro subscriptions: Google does not allow third-party apps to sign in directly to consumer plans (gemini.google.com). With a free Google AI Studio API key (aistudio.google.com/apikey), both the in-app AI assistant and handwritten formula recognition work directly inside Obsidian. Otherwise you can always use \"Open Gemini (Google AI Pro)\" from the AI assistant.",
+						render: (setting) => {
+							setting
+								.addText((t) => {
+									t.inputEl.type = "password";
+									t.setPlaceholder("AIza...");
+									t.setValue(this.plugin.getSettings().geminiApiKey);
+									t.onChange((v) => this.plugin.updateSettings({ geminiApiKey: v }));
+								})
+								.addButton((b) =>
+									b.setButtonText("Google AI Pro ↗").onClick(() => {
+										window.open(GEMINI_WEB_URL, "_blank", "noopener");
+									}),
+								);
+						},
+					},
+					{
+						name: "Gemini model",
+						desc: "Model for the in-app AI assistant.",
+						control: { type: "dropdown", key: "geminiModel", options: geminiModelOptions },
+					},
+				],
+			},
+			{
+				type: "group",
+				heading: "Formulas (LaTeX)",
+				items: [
+					{
+						name: "Formula mode (auto LaTeX)",
+						desc: "When enabled (or via the fx button on the toolbar), pausing after writing a math equation converts it into LaTeX ($...$ / $$...$$) at that spot in the note.",
+						control: { type: "toggle", key: "mathMode" },
+					},
+					{
+						name: "Auto-convert pause (ms)",
+						desc: "How long after the last stroke Formula mode waits before converting (600–3500 ms, default 1200).",
+						control: { type: "number", key: "mathAutoDelayMs", min: 600, max: 3500, step: 100 },
+					},
+					{
+						name: "LaTeX delimiters",
+						control: {
+							type: "dropdown",
+							key: "mathDelimiters",
+							options: {
+								auto: "Auto ($$ for fractions/roots, $ inline)",
+								inline: "Inline ($...$)",
+								block: "Block ($$...$$)",
+							},
+						},
+					},
+					{
+						name: "Formula recognizer (this device)",
+						desc: "Built-in offline recognizer works with no API key. Optional Gemini or OpenAI Vision improves complex handwritten equations.",
+						control: {
+							type: "dropdown",
+							key: "mathProvider",
+							options: {
+								offline: "Built-in offline recognizer",
+								gemini: "Gemini Vision API",
+								openai: "OpenAI Vision API",
+							},
+						},
+					},
+					{
+						name: "Vision API key (this device)",
+						desc: "Stored locally on this device only (never synced to your vault). Optional, only used when Gemini or OpenAI is selected.",
+						render: (setting) => {
+							setting.addText((t) => {
+								t.inputEl.type = "password";
+								t.setPlaceholder("Paste API key");
+								t.setValue(this.plugin.getSettings().mathApiKey);
+								t.onChange((v) => this.plugin.updateSettings({ mathApiKey: v }));
+							});
+						},
+					},
+					{
+						name: "Scribble to erase",
+						desc: "Scribble quickly back and forth over strokes to erase them. Conservative: only strokes the scribble covers almost completely are erased — outlines around shading and lines running through (graph axes) are kept. If nothing qualifies, the scribble stays as ink.",
+						control: { type: "toggle", key: "scribbleErase" },
+					},
+				],
+			},
+			{
+				type: "group",
+				heading: "Tools (this device)",
+				items: [
+					{
+						name: "Toolbar options",
+						desc: "Also in the toolbar: tap the active tool to open its options.",
+						searchable: false,
+					},
+					{
+						name: "Eraser",
+						desc: "Whole stroke, or precise: erase only the part you touch.",
+						control: { type: "dropdown", key: "eraserMode", options: { stroke: "Whole stroke", precise: "Precise" } },
+					},
+					{
+						name: "Precise eraser size",
+						control: { type: "dropdown", key: "eraserSize", options: { s: "Small", m: "Medium", l: "Large" } },
+					},
+					{
+						name: "Erase highlighter only",
+						control: { type: "toggle", key: "eraseHighlighterOnly" },
+					},
+					{
+						name: "Straight-line highlighter",
+						desc: "The highlighter draws a straight line from where you start (snapped to horizontal within a few degrees).",
+						control: { type: "toggle", key: "highlighterStraight" },
+					},
+					{
+						name: "Select tool (mouse)",
+						desc: "Drag a rectangle, or draw a freeform lasso. A click on a stroke selects it.",
+						visible: !Platform.isMobile,
+						control: { type: "dropdown", key: "selectMode", options: { rect: "Rectangle", lasso: "Freeform lasso" } },
+					},
+					{
+						name: "Lasso selects",
+						control: {
+							type: "dropdown",
+							key: "lassoFilter",
+							options: { both: "Pen and highlighter", pen: "Pen only", highlighter: "Highlighter only" },
+						},
+					},
+				],
+			},
+			{
+				type: "group",
+				heading: "Files",
+				items: [
+					{
+						name: "Ink folder",
+						desc: `Ink is stored as one JSON file per note: <folder>/<note path>.json. Use a visible folder so sync includes it. Current folder: ${this.plugin.getSettings().inkFolder}`,
+						render: (setting) => {
+							let pending = this.plugin.getSettings().inkFolder;
+							setting
+								.addText((t) =>
+									t
+										.setPlaceholder(DEFAULT_INK_FOLDER)
+										.setValue(this.plugin.getSettings().inkFolder)
+										.onChange((v) => (pending = v)),
+								)
+								.addButton((b) =>
+									b.setButtonText("Change").onClick(() => {
+										const to = sanitizeFolder(pending, "");
+										const from = this.plugin.store.rootFolder;
+										if (!to || to.startsWith(`${from}/`) || from.startsWith(`${to}/`)) {
+											new Notice("Choose a visible vault folder that is not inside (or around) the current ink folder.");
+											return;
+										}
+										if (to === from) return;
+										new InkFolderModal(this.app, this.plugin, from, to, () => this.refreshTab()).open();
+									}),
+								);
+						},
+					},
+					{
+						name: "Screenshot folder",
+						desc: "Where lasso screenshots go (\"Save to vault\" and \"Insert into note\").",
+						control: { type: "text", key: "screenshotFolder", placeholder: DEFAULT_SCREENSHOT_FOLDER },
+					},
+					{
+						name: "Layout alignment",
+						desc: "Tip: keep \"Readable line length\" on so drawings line up across devices.",
+						searchable: false,
+					},
+				],
+			},
+		];
+	}
+
+	/** Fallback imperative renderer for Obsidian < 1.13.0 (newer versions use `getSettingDefinitions`). */
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-		const s = this.plugin.getSettings();
-		new Setting(containerEl)
-			.setName("Show ink toolbar on this device")
-			.setDesc("Floating toolbar over the note (drag it by its grip, tap the grip to collapse or expand, hold or right-click it to snap to a preset position). Stored per device (default: shown). On desktop without \"Mouse draws\" it is the slim toolbar: Undo, Redo, Select, Show/Hide ink.")
-			.addToggle((t) => t.setValue(s.toolbarVisible).onChange((v) => this.plugin.updateSettings({ toolbarVisible: v })));
-		new Setting(containerEl)
-			.setName("Show ink")
-			.addToggle((t) => t.setValue(s.inkVisible).onChange((v) => this.plugin.updateSettings({ inkVisible: v })));
-		// [Stage D]
-		new Setting(containerEl)
-			.setName("Include ink in PDF export (this device)")
-			.setDesc("Draw the ink in Obsidian's \"Export to PDF\". The commands \"Export to PDF with ink\" / \"without ink\" set this and start the export.")
-			.addToggle((t) => t.setValue(s.includeInkInPdf).onChange((v) => this.plugin.updateSettings({ includeInkInPdf: v })));
-		new Setting(containerEl)
-			.setName("Page boundary guides (A4 / A3)")
-			.setDesc("Shows dashed sheet limits (right edge and page breaks) matching PDF export dimensions so drawings stay cleanly on each page.")
-			.addDropdown((d) => {
-				for (const f of PAGE_GUIDE_FORMATS) d.addOption(f, PAGE_GUIDE_LABELS[f]);
-				return d.setValue(s.pageGuide).onChange((v) => this.plugin.updateSettings({ pageGuide: v as PageGuideFormat }));
-			});
-		new Setting(containerEl)
-			.setName("Default export style")
-			.setDesc(`Themed: the PDF looks like the note in Obsidian (theme, snippets). Document: a plain document look (white page, black text, 12 pt, plain headings), handy for handing in work. Used by Obsidian's own export and "Export PDF with / without ink"; the ⋯ menu also offers the other style ("${styleExportLabel("document")}" / "${styleExportLabel("themed")}") for one export.`)
-			.addDropdown((d) =>
-				d
-					.addOption("themed", "Themed")
-					.addOption("document", "Document")
-					.setValue(s.defaultExportStyle)
-					.onChange((v) => this.plugin.updateSettings({ defaultExportStyle: v as ExportStyle })),
-			);
-		new Setting(containerEl)
-			.setName("Document style font")
-			.setDesc("Font of the document-style PDF export (12 pt). Serif: Times New Roman (or Times, Georgia). Sans: Calibri (or Aptos, Carlito, Arial).")
-			.addDropdown((d) =>
-				d
-					.addOption("serif", "Serif (Times New Roman)")
-					.addOption("sans", "Sans (Calibri)")
-					.setValue(s.docExportFont)
-					.onChange((v) => this.plugin.updateSettings({ docExportFont: v as DocFont })),
-			);
-		if (!Platform.isMobile) {
-			new Setting(containerEl)
-				.setName("Mouse draws (this device)")
-				.setDesc("Draw with the primary mouse button (shows the full drawing toolbar). Off: the mouse reads, and the Select tool rearranges ink. Pens always draw; fingers always scroll.")
-				.addToggle((t) => t.setValue(s.mouseDraws).onChange((v) => this.plugin.updateSettings({ mouseDraws: v })));
-			new Setting(containerEl)
-				.setName("Pen on this device")
-				.setDesc("Show the full drawing toolbar (tools, colors) for a pen such as a Surface Pen, even when the mouse doesn't draw. Turns on by itself the first time a pen touches a note. Off: the slim toolbar with the mouse Select tool.")
-				.addToggle((t) => t.setValue(s.penDevice).onChange((v) => this.plugin.updateSettings({ penDevice: v })));
-		}
+		this.renderDefinitions(containerEl, this.getSettingDefinitions());
+	}
 
-		new Setting(containerEl).setName("Pen").setHeading();
-		new Setting(containerEl)
-			.setName("Pen feel")
-			.setDesc("Ballpoint: constant width. Fountain pen: pressure and speed vary the width, soft tapered ends. Pencil: soft graphite shading with tilt. Marker: bold smooth felt-tip. Calligraphy: expressive high-contrast ribbon. Dashed is always ballpoint.")
-			.addDropdown((d) =>
-				d
-					.addOption("ball", "Ballpoint")
-					.addOption("notes", "Fountain pen")
-					.addOption("pencil", "Pencil")
-					.addOption("marker", "Marker")
-					.addOption("calligraphy", "Calligraphy")
-					.setValue(s.penFeel)
-					.onChange((v) => this.plugin.updateSettings({ penFeel: v as PenFeel })),
-			);
-		new Setting(containerEl)
-			.setName("Tilt shading (Neigung)")
-			.setDesc("Tilting the Apple Pencil widens strokes for shading (works with Ballpoint, Fountain pen, Pencil, and Highlighter).")
-			.addToggle((t) => t.setValue(s.tiltShading).onChange((v) => this.plugin.updateSettings({ tiltShading: v })));
-		new Setting(containerEl)
-			.setName("Smoothing")
-			.setDesc("Filters pen jitter and pixel steps while you write (strong when slow, almost no lag when fast). Lines are always drawn as smooth curves. Shapes are never smoothed.")
-			.addDropdown((d) =>
-				d
-					.addOption("off", "Off")
-					.addOption("light", "Light")
-					.addOption("medium", "Medium (default)")
-					.addOption("strong", "Strong")
-					.setValue(s.smoothing)
-					.onChange((v) => this.plugin.updateSettings({ smoothing: v as SmoothingLevel })),
-			);
-		const widths: { key: keyof PenWidths; name: string }[] = [
-			{ key: "thin", name: "Thin width (px)" },
-			{ key: "dashed", name: "Dashed width (px)" },
-			{ key: "thick", name: "Thick width (px)" },
-		];
-		for (const w of widths) {
-			new Setting(containerEl)
-				.setName(w.name)
-				.setDesc(`Default ${DEFAULT_PEN_WIDTHS[w.key]}. Applies to new strokes.`)
-				.addText((t) => {
+	private renderDefinitions(containerEl: HTMLElement, items: readonly SettingDefinitionItem[]): void {
+		for (const item of items) {
+			const visible = typeof item.visible === "function" ? item.visible() : item.visible !== false;
+			if (!visible) continue;
+			if ("type" in item && item.type === "group") {
+				if (item.heading) new Setting(containerEl).setName(item.heading).setHeading();
+				this.renderDefinitions(containerEl, item.items ?? []);
+				continue;
+			}
+			const def = item as SettingDefinition;
+			const setting = new Setting(containerEl).setName(def.name);
+			if (def.desc) setting.setDesc(def.desc);
+			if ("render" in def && def.render) {
+				def.render(setting, undefined as never);
+				continue;
+			}
+			if (!("control" in def) || !def.control) continue;
+			const ctl = def.control;
+			const val = this.getControlValue(ctl.key);
+			const strVal = typeof val === "string" || typeof val === "number" ? String(val) : "";
+			if (ctl.type === "toggle") {
+				setting.addToggle((t) => t.setValue(Boolean(val)).onChange((v) => this.setControlValue(ctl.key, v)));
+			} else if (ctl.type === "dropdown") {
+				setting.addDropdown((d) => {
+					for (const [k, label] of Object.entries(ctl.options)) d.addOption(k, label);
+					return d.setValue(strVal).onChange((v) => this.setControlValue(ctl.key, v));
+				});
+			} else if (ctl.type === "text") {
+				setting.addText((t) => {
+					if (ctl.placeholder) t.setPlaceholder(ctl.placeholder);
+					t.setValue(strVal).onChange((v) => this.setControlValue(ctl.key, v));
+				});
+			} else if (ctl.type === "number") {
+				setting.addText((t) => {
 					t.inputEl.type = "number";
-					t.inputEl.step = "0.1";
-					t.inputEl.min = "0.5";
-					t.setValue(String(s.penWidths[w.key])).onChange((v) => {
-						const n = sanitizeWidth(v, NaN);
-						if (Number.isNaN(n)) return;
-						this.plugin.updateSettings({ penWidths: { ...this.plugin.getSettings().penWidths, [w.key]: n } });
-					});
+					if (ctl.step !== undefined) t.inputEl.step = String(ctl.step);
+					if (ctl.min !== undefined) t.inputEl.min = String(ctl.min);
+					if (ctl.max !== undefined) t.inputEl.max = String(ctl.max);
+					t.setValue(strVal).onChange((v) => this.setControlValue(ctl.key, v));
 				});
+			}
 		}
-
-		new Setting(containerEl).setName("Gestures").setHeading();
-		new Setting(containerEl)
-			.setName("Snap to shape")
-			.setDesc("Draw a line, arrow, rectangle, triangle, polygon or ellipse and keep the pen still: it snaps to a clean shape. Keep the pen down to adjust it.")
-			.addToggle((t) => t.setValue(s.shapeSnap).onChange((v) => this.plugin.updateSettings({ shapeSnap: v })));
-		new Setting(containerEl)
-			.setName("Hold delay (ms)")
-			.setDesc(`How long the pen must stay still before snapping. Default ${DEFAULT_HOLD_MS} (${HOLD_MS_MIN}–${HOLD_MS_MAX}).`)
-			.addText((t) => {
-				t.inputEl.type = "number";
-				t.inputEl.step = "50";
-				t.inputEl.min = String(HOLD_MS_MIN);
-				t.inputEl.max = String(HOLD_MS_MAX);
-				t.setValue(String(s.shapeHoldMs)).onChange((v) => {
-					const n = sanitizeHoldMs(v, NaN);
-					if (!Number.isNaN(n)) this.plugin.updateSettings({ shapeHoldMs: n });
-				});
-			});
-		new Setting(containerEl)
-			.setName("Double-tap with the Pencil tip")
-			.setDesc("Tap the screen twice quickly with the Pencil tip to run the double-tap action below. Taps leave no dots, and taps beside recent handwriting are ignored.")
-			.addToggle((t) => t.setValue(s.doubleTapEraser).onChange((v) => this.plugin.updateSettings({ doubleTapEraser: v })));
-		new Setting(containerEl)
-			.setName("Double-tap action")
-			.setDesc("Action triggered by Pencil tip double-tap (and bridged barrel double-tap if provided by the host).")
-			.addDropdown((d) => {
-				for (const a of PENCIL_GESTURE_ACTIONS) {
-					if (a.value !== "system" && a.value !== "none") d.addOption(a.value, a.label);
-				}
-				return d.setValue(s.doubleTapAction).onChange((v) => this.plugin.updateSettings({ doubleTapAction: v as PencilGestureAction }));
-			});
-		new Setting(containerEl)
-			.setName("Apple Pencil Pro squeeze action")
-			.setDesc("Action when a squeeze event is forwarded to the WebView. Important: Apple's iPadOS WKWebView never exposes native hardware barrel Squeeze or barrel Double-tap (UIPencilInteraction) to Obsidian JS plugins; use screen tip double-tap, toolbar buttons, or commands instead.")
-			.addDropdown((d) => {
-				for (const a of PENCIL_GESTURE_ACTIONS) d.addOption(a.value, a.label);
-				return d.setValue(s.squeezeAction).onChange((v) => this.plugin.updateSettings({ squeezeAction: v as PencilGestureAction }));
-			});
-		new Setting(containerEl).setName("Google Gemini & KI-Assistent (this device)").setHeading();
-		new Setting(containerEl)
-			.setName("Gemini API-Key (lokal auf diesem Gerät)")
-			.setDesc("Hinweis zum Google AI Pro Abo: Google erlaubt Drittanbieter-Apps keinen direkten Login in das Consumer-Abo (gemini.google.com). Mit einem kostenlosen Google AI Studio API-Key (aistudio.google.com/apikey) funktionieren sowohl der In-App KI-Assistent als auch die handschriftliche Formel-Erkennung direkt in Obsidian. Alternativ kannst du im KI-Assistenten jederzeit „In Google AI Pro öffnen“ nutzen.")
-			.addText((t) => {
-				t.inputEl.type = "password";
-				t.setPlaceholder("AIza...");
-				t.setValue(s.geminiApiKey);
-				t.onChange((v) => this.plugin.updateSettings({ geminiApiKey: v }));
-			})
-			.addButton((b) =>
-				b.setButtonText("Google AI Pro ↗").onClick(() => {
-					window.open(GEMINI_WEB_URL, "_blank", "noopener");
-				}),
-			);
-		new Setting(containerEl)
-			.setName("Gemini Modell")
-			.setDesc("Modell für den In-App KI-Assistenten.")
-			.addDropdown((d) => {
-				for (const m of GEMINI_MODELS) d.addOption(m.value, m.label);
-				return d.setValue(s.geminiModel).onChange((v) => this.plugin.updateSettings({ geminiModel: v as GeminiModel }));
-			});
-
-		new Setting(containerEl).setName("Formulas (LaTeX)").setHeading();
-		new Setting(containerEl)
-			.setName("Formula mode (auto LaTeX)")
-			.setDesc("When enabled (or via the fx button on the toolbar), pausing after writing a math equation converts it into LaTeX ($...$ / $$...$$) at that spot in the note.")
-			.addToggle((t) => t.setValue(s.mathMode).onChange((v) => this.plugin.updateSettings({ mathMode: v })));
-		new Setting(containerEl)
-			.setName("Auto-convert pause (ms)")
-			.setDesc("How long after the last stroke Formula mode waits before converting (600–3500 ms, default 1200).")
-			.addText((t) => {
-				t.inputEl.type = "number";
-				t.inputEl.step = "100";
-				t.inputEl.min = "600";
-				t.inputEl.max = "3500";
-				t.setValue(String(s.mathAutoDelayMs)).onChange((v) => {
-					const n = Number(v);
-					if (Number.isFinite(n)) this.plugin.updateSettings({ mathAutoDelayMs: n });
-				});
-			});
-		new Setting(containerEl)
-			.setName("LaTeX delimiters")
-			.addDropdown((d) =>
-				d
-					.addOption("auto", "Auto ($$ for fractions/roots, $ inline)")
-					.addOption("inline", "Inline ($...$)")
-					.addOption("block", "Block ($$...$$)")
-					.setValue(s.mathDelimiters)
-					.onChange((v) => this.plugin.updateSettings({ mathDelimiters: v as MathDelimiters })),
-			);
-		new Setting(containerEl)
-			.setName("Formula recognizer (this device)")
-			.setDesc("Built-in offline recognizer works with no API key. Optional Gemini or OpenAI Vision improves complex handwritten equations.")
-			.addDropdown((d) =>
-				d
-					.addOption("offline", "Built-in offline recognizer")
-					.addOption("gemini", "Gemini Vision API")
-					.addOption("openai", "OpenAI Vision API")
-					.setValue(s.mathProvider)
-					.onChange((v) => this.plugin.updateSettings({ mathProvider: v as MathVisionProvider })),
-			);
-		new Setting(containerEl)
-			.setName("Vision API key (this device)")
-			.setDesc("Stored locally on this device only (never synced to your vault). Optional, only used when Gemini or OpenAI is selected.")
-			.addText((t) => {
-				t.inputEl.type = "password";
-				t.setPlaceholder("Paste API key");
-				t.setValue(s.mathApiKey);
-				t.onChange((v) => this.plugin.updateSettings({ mathApiKey: v }));
-			});
-		new Setting(containerEl)
-			.setName("Scribble to erase")
-			.setDesc("Scribble quickly back and forth over strokes to erase them. Conservative: only strokes the scribble covers almost completely are erased — outlines around shading and lines running through (graph axes) are kept. If nothing qualifies, the scribble stays as ink.")
-			.addToggle((t) => t.setValue(s.scribbleErase).onChange((v) => this.plugin.updateSettings({ scribbleErase: v })));
-
-		new Setting(containerEl).setName("Tools (this device)").setHeading();
-		containerEl.createEl("p", {
-			cls: "setting-item-description",
-			text: "Also in the toolbar: tap the active tool to open its options.",
-		});
-		new Setting(containerEl)
-			.setName("Eraser")
-			.setDesc("Whole stroke, or precise: erase only the part you touch.")
-			.addDropdown((d) =>
-				d
-					.addOption("stroke", "Whole stroke")
-					.addOption("precise", "Precise")
-					.setValue(s.eraserMode)
-					.onChange((v) => this.plugin.updateSettings({ eraserMode: v as EraserMode })),
-			);
-		new Setting(containerEl).setName("Precise eraser size").addDropdown((d) =>
-			d
-				.addOption("s", "Small")
-				.addOption("m", "Medium")
-				.addOption("l", "Large")
-				.setValue(s.eraserSize)
-				.onChange((v) => this.plugin.updateSettings({ eraserSize: v as EraserSize })),
-		);
-		new Setting(containerEl)
-			.setName("Erase highlighter only")
-			.addToggle((t) => t.setValue(s.eraseHighlighterOnly).onChange((v) => this.plugin.updateSettings({ eraseHighlighterOnly: v })));
-		new Setting(containerEl)
-			.setName("Straight-line highlighter")
-			.setDesc("The highlighter draws a straight line from where you start (snapped to horizontal within a few degrees).")
-			.addToggle((t) => t.setValue(s.highlighterStraight).onChange((v) => this.plugin.updateSettings({ highlighterStraight: v })));
-		if (!Platform.isMobile) {
-			// [Stage F]
-			new Setting(containerEl)
-				.setName("Select tool (mouse)")
-				.setDesc("Drag a rectangle, or draw a freeform lasso. A click on a stroke selects it.")
-				.addDropdown((d) =>
-					d
-						.addOption("rect", "Rectangle")
-						.addOption("lasso", "Freeform lasso")
-						.setValue(s.selectMode)
-						.onChange((v) => this.plugin.updateSettings({ selectMode: v as SelectMode })),
-				);
-		}
-		new Setting(containerEl).setName("Lasso selects").addDropdown((d) =>
-			d
-				.addOption("both", "Pen and highlighter")
-				.addOption("pen", "Pen only")
-				.addOption("highlighter", "Highlighter only")
-				.setValue(s.lassoFilter)
-				.onChange((v) => this.plugin.updateSettings({ lassoFilter: v as LassoFilter })),
-		);
-
-		new Setting(containerEl).setName("Files").setHeading();
-		let pending = s.inkFolder;
-		new Setting(containerEl)
-			.setName("Ink folder")
-			.setDesc(`Ink is stored as one JSON file per note: <folder>/<note path>.json. Use a visible folder so sync includes it. Current folder: ${s.inkFolder}`)
-			.addText((t) => t.setPlaceholder(DEFAULT_INK_FOLDER).setValue(s.inkFolder).onChange((v) => (pending = v)))
-			.addButton((b) =>
-				b.setButtonText("Change").onClick(() => {
-					const to = sanitizeFolder(pending, "");
-					const from = this.plugin.store.rootFolder;
-					if (!to || to.startsWith(`${from}/`) || from.startsWith(`${to}/`)) {
-						new Notice("Choose a visible vault folder that is not inside (or around) the current ink folder.");
-						return;
-					}
-					if (to === from) return;
-					new InkFolderModal(this.app, this.plugin, from, to, () => this.display()).open();
-				}),
-			);
-		new Setting(containerEl)
-			.setName("Screenshot folder")
-			.setDesc("Where lasso screenshots go (\"Save to vault\" and \"Insert into note\").")
-			.addText((t) =>
-				t
-					.setPlaceholder(DEFAULT_SCREENSHOT_FOLDER)
-					.setValue(s.screenshotFolder)
-					.onChange((v) => this.plugin.updateSettings({ screenshotFolder: sanitizeFolder(v, DEFAULT_SCREENSHOT_FOLDER) })),
-			);
-
-		containerEl.createEl("p", {
-			cls: "setting-item-description",
-			text: "Tip: keep \"Readable line length\" on so drawings line up across devices.",
-		});
 	}
 }
 

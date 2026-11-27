@@ -22,11 +22,11 @@ export type GeminiModel =
 	| "gemini-3.8-flash";
 
 export const GEMINI_MODELS: readonly { value: GeminiModel; label: string }[] = [
-	{ value: "gemini-4-hydrogen", label: "Gemini 4 Hydrogen (Standard · schnell)" },
-	{ value: "gemini-4-neon", label: "Gemini 4 Neon (Mathe, MINT & Code)" },
-	{ value: "gemini-4-argon", label: "Gemini 4 Argon (Tiefes Denken)" },
-	{ value: "gemini-4-carbon", label: "Gemini 4 Carbon (Flaggschiff)" },
-	{ value: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Ultra-schnell)" },
+	{ value: "gemini-4-hydrogen", label: "Gemini 4 Hydrogen (Default · fast)" },
+	{ value: "gemini-4-neon", label: "Gemini 4 Neon (Math, STEM & Code)" },
+	{ value: "gemini-4-argon", label: "Gemini 4 Argon (Deep thinking)" },
+	{ value: "gemini-4-carbon", label: "Gemini 4 Carbon (Flagship)" },
+	{ value: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Ultra-fast)" },
 ];
 
 export const GEMINI_VIEW_TYPE = "ink-pages-gemini-view";
@@ -72,7 +72,7 @@ export function buildWebHandoffPrompt(question: string, noteTitle?: string, note
 	if (q) parts.push(q);
 	if (noteContext && noteContext.trim()) {
 		const trimmed = noteContext.trim().slice(0, 6000);
-		parts.push(`\n---\nNotiz-Kontext${noteTitle ? ` (${noteTitle})` : ""}:\n${trimmed}`);
+		parts.push(`\n---\nNote context${noteTitle ? ` (${noteTitle})` : ""}:\n${trimmed}`);
 	}
 	return parts.join("\n").trim();
 }
@@ -91,12 +91,12 @@ export async function handoffImageToGeminiAccount(base64Png: string, openSidebar
 		const blob = Promise.resolve(base64ToPngBlob(base64Png));
 		const copied = await copyPngToClipboard(blob);
 		if (copied) {
-			new Notice("Handschrift als Bild kopiert — einfach in Gemini (Google-Konto) einfügen!", 4000);
+			new Notice("Handwriting copied as image — paste into Gemini (Google account)!", 4000);
 		} else {
-			new Notice("Gemini wird geöffnet — bitte Bild ggf. per Screenshot teilen.", 3500);
+			new Notice("Opening Gemini — share the image via screenshot if needed.", 3500);
 		}
 	} catch {
-		new Notice("Gemini wird geöffnet…", 2500);
+		new Notice("Opening Gemini…", 2500);
 	}
 	if (!Platform.isMobile && openSidebar) {
 		await openSidebar();
@@ -108,7 +108,7 @@ export async function handoffImageToGeminiAccount(base64Png: string, openSidebar
 /** Call Google Gemini `generateContent` via Obsidian `requestUrl` (optional API mode). */
 export async function askGemini(req: GeminiRequest): Promise<string> {
 	const key = req.apiKey.trim();
-	if (!key) throw new Error("Kein optionaler Gemini API-Key hinterlegt.");
+	if (!key) throw new Error("No optional Gemini API key configured.");
 
 	const contents: { role: "user" | "model"; parts: Record<string, unknown>[] }[] = [];
 	for (const h of req.history ?? []) {
@@ -117,7 +117,7 @@ export async function askGemini(req: GeminiRequest): Promise<string> {
 
 	const userParts: Record<string, unknown>[] = [];
 	const contextPrefix = req.noteContext?.trim()
-		? `Kontext aus der aktuellen Obsidian-Notiz:\n"""\n${req.noteContext.trim().slice(0, 8000)}\n"""\n\n`
+		? `Context from the current Obsidian note:\n"""\n${req.noteContext.trim().slice(0, 8000)}\n"""\n\n`
 		: "";
 	userParts.push({ text: `${contextPrefix}${req.prompt.trim()}` });
 	if (req.imageBase64Png) {
@@ -139,7 +139,7 @@ export async function askGemini(req: GeminiRequest): Promise<string> {
 			systemInstruction: {
 				parts: [
 					{
-						text: "Du bist ein hilfreicher Studien- und Notiz-Assistent in Obsidian. Antworte klar, präzise und in der Sprache der Frage. Verwende für mathematische Formeln sauberes LaTeX ($...$ für inline, $$...$$ für Blöcke).",
+						text: "You are a helpful study and note-taking assistant in Obsidian. Answer clearly, concisely, and in the language of the question. Use clean LaTeX ($...$ for inline, $$...$$ for blocks) for mathematical formulas.",
 					},
 				],
 			},
@@ -150,7 +150,7 @@ export async function askGemini(req: GeminiRequest): Promise<string> {
 	if (res.status < 200 || res.status >= 300) {
 		const errJson = res.json as { error?: { message?: string } } | undefined;
 		const msg = errJson?.error?.message ?? `HTTP ${res.status}`;
-		throw new Error(`Gemini API Fehler: ${msg}`);
+		throw new Error(`Gemini API error: ${msg}`);
 	}
 	const json = res.json as {
 		candidates?: { content?: { parts?: { text?: string }[] } }[];
@@ -159,22 +159,22 @@ export async function askGemini(req: GeminiRequest): Promise<string> {
 		.map((p) => p.text ?? "")
 		.join("")
 		.trim();
-	if (!text) throw new Error("Gemini hat keine Antwort zurückgegeben.");
+	if (!text) throw new Error("Gemini returned an empty response.");
 	return text;
 }
 
 const QUICK_PROMPTS_TEXT = [
-	{ label: "Erklären", prompt: "Erkläre den Inhalt dieser Notiz einfach und verständlich." },
-	{ label: "Zusammenfassen", prompt: "Fasse diese Notiz in klaren Stichpunkten zusammen." },
-	{ label: "Prüfen", prompt: "Prüfe meine Notizen und Rechnungen auf Fehler und gib hilfreiche Hinweise." },
-	{ label: "Übungsfragen", prompt: "Erstelle 3 kurze Verständnisfragen zu dieser Notiz." },
+	{ label: "Explain", prompt: "Explain the contents of this note simply and clearly." },
+	{ label: "Summarize", prompt: "Summarize this note in clear bullet points." },
+	{ label: "Check", prompt: "Check my notes and calculations for errors and give helpful feedback." },
+	{ label: "Practice questions", prompt: "Create 3 short comprehension questions about this note." },
 ] as const;
 
 const QUICK_PROMPTS_IMAGE = [
-	{ label: "Rechnung prüfen", prompt: "Prüfe diese handschriftliche Rechnung Schritt für Schritt auf Fehler." },
-	{ label: "Erklären", prompt: "Erkläre diese handschriftliche Skizze / Formel verständlich." },
-	{ label: "Als LaTeX", prompt: "Wandle diese handschriftliche Formel in sauberes Obsidian-LaTeX ($...$ / $$...$$) um." },
-	{ label: "Weiterlösen", prompt: "Löse diese Aufgabe Schritt für Schritt weiter und erkläre jeden Schritt." },
+	{ label: "Check calculation", prompt: "Check this handwritten calculation step by step for errors." },
+	{ label: "Explain", prompt: "Explain this handwritten sketch or formula clearly." },
+	{ label: "To LaTeX", prompt: "Convert this handwritten formula into clean Obsidian LaTeX ($...$ / $$...$$)." },
+	{ label: "Solve further", prompt: "Continue solving this problem step by step and explain each step." },
 ] as const;
 
 export class GeminiAssistantModal extends Modal {
@@ -207,18 +207,18 @@ export class GeminiAssistantModal extends Modal {
 		const accountText = accountCard.createDiv({ cls: "pl-ai-account-desc" });
 		if (Platform.isDesktopApp) {
 			accountText.setText(
-				"Melde dich direkt mit deinem Google-Konto (Google AI Pro) in der Obsidian-Seitenleiste an — ganz ohne API-Key.",
+				"Sign in directly with your Google account (Google AI Pro) in the Obsidian sidebar — no API key required.",
 			);
 		} else {
 			accountText.setText(
-				"Nutze dein Google AI Pro Konto ohne API-Key: Frage oder Handschrift-Bild wird kopiert und direkt in Gemini (ideal im iPad Split View) geöffnet. (Hinweis: Google blockiert Konto-Logins in eingebetteten iPadOS-WebViews.)",
+				"Use your Google AI Pro account without an API key: your question or handwritten image is copied and opened directly in Gemini (ideal in iPad Split View). (Note: Google blocks account logins inside embedded iPadOS WebViews.)",
 			);
 		}
 		const accountActions = accountCard.createDiv({ cls: "pl-ai-account-actions" });
 		if (this.opts.imageBase64Png) {
 			const imgBtn = accountActions.createEl("button", {
 				cls: "mod-cta",
-				text: Platform.isDesktopApp ? "Bild kopieren & Gemini-Seitenleiste öffnen" : "Bild kopieren & in Gemini (Konto) öffnen ↗",
+				text: Platform.isDesktopApp ? "Copy image & open Gemini sidebar" : "Copy image & open Gemini (account) ↗",
 			});
 			imgBtn.addEventListener("click", () => {
 				const openSidebar = this.host.openSidebar ? () => this.host.openSidebar!() : undefined;
@@ -227,7 +227,7 @@ export class GeminiAssistantModal extends Modal {
 		}
 		const textProBtn = accountActions.createEl("button", {
 			cls: this.opts.imageBase64Png ? "" : "mod-cta",
-			text: Platform.isDesktopApp ? "Frage kopieren & Gemini-Seitenleiste öffnen" : "Frage + Kontext kopieren & Gemini öffnen ↗",
+			text: Platform.isDesktopApp ? "Copy question & open Gemini sidebar" : "Copy question + context & open Gemini ↗",
 		});
 		textProBtn.addEventListener("click", () => void this.openInGoogleAiPro());
 
@@ -236,9 +236,9 @@ export class GeminiAssistantModal extends Modal {
 			const att = contentEl.createDiv({ cls: "pl-ai-attachment" });
 			att.createEl("img", {
 				cls: "pl-ai-attachment-img",
-				attr: { src: `data:image/png;base64,${this.opts.imageBase64Png}`, alt: "Ausgewählte Handschrift" },
+				attr: { src: `data:image/png;base64,${this.opts.imageBase64Png}`, alt: "Selected handwriting" },
 			});
-			att.createSpan({ cls: "pl-ai-attachment-label", text: "Handschrift-Auswahl bereit zum Kopieren / Senden" });
+			att.createSpan({ cls: "pl-ai-attachment-label", text: "Handwritten selection ready to copy / send" });
 		}
 
 		// Context toggle if note text exists
@@ -250,7 +250,7 @@ export class GeminiAssistantModal extends Modal {
 				this.includeNoteContext = cb.checked;
 			});
 			ctxRow.createSpan({
-				text: `Notiz-Kontext mitsenden${this.opts.noteTitle ? ` (${this.opts.noteTitle})` : ""}`,
+				text: `Include note context${this.opts.noteTitle ? ` (${this.opts.noteTitle})` : ""}`,
 			});
 		}
 
@@ -273,8 +273,8 @@ export class GeminiAssistantModal extends Modal {
 			attr: {
 				rows: "2",
 				placeholder: this.opts.imageBase64Png
-					? "Frage zur Auswahl (z. B. Prüfe meine Rechnung / Wandle in LaTeX um)..."
-					: "Frage an dein Gemini-Konto schreiben...",
+					? "Ask about selection (e.g. Check my calculation / Convert to LaTeX)..."
+					: "Write a question for your Gemini account...",
 			},
 		});
 		if (this.opts.initialPrompt) this.inputEl.value = this.opts.initialPrompt;
@@ -286,7 +286,7 @@ export class GeminiAssistantModal extends Modal {
 			}
 		});
 		if (hasKey) {
-			this.sendBtn = composer.createEl("button", { cls: "mod-cta pl-ai-send", text: "Direkt senden" });
+			this.sendBtn = composer.createEl("button", { cls: "mod-cta pl-ai-send", text: "Send directly" });
 			this.sendBtn.addEventListener("click", () => void this.send());
 		}
 
@@ -297,7 +297,7 @@ export class GeminiAssistantModal extends Modal {
 		// Collapsible optional API section (tucked away, never nags!)
 		const adv = contentEl.createEl("details", { cls: "pl-ai-advanced" });
 		adv.createEl("summary", {
-			text: hasKey ? "Direkt-Modus aktiv (API-Key / Modell ändern)" : "Optional: Direktantwort in Obsidian ohne App-Wechsel (API-Key)",
+			text: hasKey ? "Direct mode active (change API key / model)" : "Optional: direct answer in Obsidian without switching apps (API key)",
 		});
 		const advBody = adv.createDiv({ cls: "pl-ai-advanced-body" });
 		const modelSelect = advBody.createEl("select", { cls: "dropdown pl-ai-model" });
@@ -311,18 +311,18 @@ export class GeminiAssistantModal extends Modal {
 		const row = advBody.createDiv({ cls: "pl-ai-key-row" });
 		const keyInput = row.createEl("input", {
 			type: "password",
-			placeholder: "Optionaler Gemini API-Key (AIza...)",
+			placeholder: "Optional Gemini API key (AIza...)",
 			cls: "pl-ai-key-input",
 			value: this.host.getApiKey(),
 		});
-		const saveKeyBtn = row.createEl("button", { text: "Speichern" });
+		const saveKeyBtn = row.createEl("button", { text: "Save" });
 		saveKeyBtn.addEventListener("click", () => {
 			this.host.setApiKey(keyInput.value.trim());
-			new Notice("Gespeichert.");
+			new Notice("Saved.");
 			this.onOpen();
 		});
 		const getKeyLink = row.createEl("a", {
-			text: "Kostenloser Key ↗",
+			text: "Free key ↗",
 			href: GEMINI_API_KEY_URL,
 			cls: "pl-ai-key-link",
 		});
@@ -335,12 +335,12 @@ export class GeminiAssistantModal extends Modal {
 	}
 
 	private async openInGoogleAiPro(): Promise<void> {
-		const q = this.inputEl?.value.trim() || "Hilf mir bei dieser Notiz:";
+		const q = this.inputEl?.value.trim() || "Help me with this note:";
 		const payload = buildWebHandoffPrompt(q, this.opts.noteTitle, this.includeNoteContext ? this.opts.noteContext : undefined);
 		try {
 			if (payload && navigator.clipboard?.writeText) {
 				await navigator.clipboard.writeText(payload);
-				new Notice("Frage & Notiz-Kontext kopiert — einfach in Gemini (Google-Konto) einfügen!", 3800);
+				new Notice("Question & note context copied — paste into Gemini (Google account)!", 3800);
 			}
 		} catch {
 			/* ignore */
@@ -356,19 +356,19 @@ export class GeminiAssistantModal extends Modal {
 
 	private appendMessage(msg: GeminiMessage): void {
 		const bubble = this.threadEl.createDiv({ cls: `pl-ai-msg is-${msg.role}` });
-		bubble.createDiv({ cls: "pl-ai-msg-role", text: msg.role === "user" ? "Du" : "Gemini" });
+		bubble.createDiv({ cls: "pl-ai-msg-role", text: msg.role === "user" ? "You" : "Gemini" });
 		bubble.createDiv({ cls: "pl-ai-msg-body", text: msg.text });
 		if (msg.role === "model") {
 			const actions = bubble.createDiv({ cls: "pl-ai-msg-actions" });
-			const copyBtn = actions.createEl("button", { text: "Kopieren" });
+			const copyBtn = actions.createEl("button", { text: "Copy" });
 			copyBtn.addEventListener("click", () => {
-				void navigator.clipboard?.writeText(msg.text).then(() => new Notice("Antwort kopiert."));
+				void navigator.clipboard?.writeText(msg.text).then(() => new Notice("Response copied."));
 			});
 			if (this.opts.insertAtCursor) {
-				const insBtn = actions.createEl("button", { cls: "mod-cta", text: "In Notiz einfügen" });
+				const insBtn = actions.createEl("button", { cls: "mod-cta", text: "Insert into note" });
 				insBtn.addEventListener("click", () => {
 					if (this.opts.insertAtCursor?.(msg.text)) {
-						new Notice("Antwort in die Notiz eingefügt.");
+						new Notice("Response inserted into note.");
 						this.close();
 					}
 				});
@@ -391,7 +391,7 @@ export class GeminiAssistantModal extends Modal {
 		this.inputEl.value = "";
 		this.appendMessage({ role: "user", text: prompt });
 		this.statusEl.removeClass("pl-hidden");
-		this.statusEl.setText("Gemini denkt nach…");
+		this.statusEl.setText("Gemini is thinking…");
 		try {
 			const reply = await askGemini({
 				apiKey,
@@ -406,7 +406,7 @@ export class GeminiAssistantModal extends Modal {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			new Notice(msg, 5000);
-			this.appendMessage({ role: "model", text: `Fehler: ${msg}` });
+			this.appendMessage({ role: "model", text: `Error: ${msg}` });
 		} finally {
 			this.busy = false;
 			if (this.sendBtn) this.sendBtn.disabled = false;
