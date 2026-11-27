@@ -179,6 +179,7 @@ export class InkToolbar {
 	private caption: HTMLElement | null = null;
 	private popover: HTMLElement | null = null;
 	private popoverKind: PopoverKind | null = null;
+	private readonly outsideGuard: OutsideDismissGuard;
 	private readonly resizeObs: ResizeObserver | null = null;
 	private drag: DragState | null = null;
 	private longPressTimer = 0;
@@ -194,6 +195,7 @@ export class InkToolbar {
 		this.leafEl = view.containerEl;
 		this.leafEl.addClass("pl-has-float");
 		this.el = this.leafEl.createDiv({ cls: "ink-pages-toolbar" });
+		this.outsideGuard = new OutsideDismissGuard(this.el.ownerDocument);
 
 		// Keep editor focus/cursor: a press anywhere on the toolbar or its popover never moves focus.
 		const keepFocus = (e: Event) => e.preventDefault();
@@ -365,6 +367,7 @@ export class InkToolbar {
 		this.clearLongPress();
 		this.endDragGuards();
 		this.closePopover();
+		this.outsideGuard.clear();
 		this.el.remove();
 		if (!this.leafEl.querySelector(":scope > .ink-pages-toolbar")) this.leafEl.removeClass("pl-has-float");
 	}
@@ -781,10 +784,11 @@ export class InkToolbar {
 		this.el.ownerDocument.removeEventListener("pointerdown", this.onOutside, true);
 	}
 
-	/** Pen, finger or mouse press outside the toolbar closes the popover (and still acts normally). */
+	/** Pen, finger or mouse press outside the toolbar closes the popover and consumes that interaction. */
 	private readonly onOutside = (e: PointerEvent): void => {
 		if ((e.target as Node | null)?.instanceOf(Node) && this.el.contains(e.target as Node)) return;
 		this.closePopover();
+		this.outsideGuard.consume(e);
 	};
 
 	/**
@@ -1257,4 +1261,87 @@ const DRAG_GUARDED = ["touchstart", "touchmove", "touchend", "touchcancel"] as c
 function stopTouch(e: Event): void {
 	if (e.cancelable) e.preventDefault();
 	e.stopPropagation();
+}
+
+const DISMISS_COMPAT_EVENTS = ["mousedown", "mouseup", "click", "dblclick", "auxclick", "contextmenu"] as const;
+const DISMISS_SUPPRESS_MS = 400;
+
+/**
+ * Consumes the remainder of a pointer interaction that dismissed a toolbar popover so it cannot
+ * draw an ink dot, move the editor caret, or fire a stray click underneath. Finger touch events
+ * remain unblocked so native scrolling still works immediately.
+ */
+class OutsideDismissGuard {
+	private activePointerId: number | null = null;
+	private armedEvent: PointerEvent | null = null;
+	private armed = false;
+	private timer = 0;
+
+	constructor(private readonly doc: Document) {}
+
+	consume(e: PointerEvent): void {
+		this.clear();
+		if (e.cancelable) e.preventDefault();
+		e.stopPropagation();
+		this.activePointerId = e.pointerId;
+		this.armedEvent = e;
+		this.armed = true;
+		this.doc.addEventListener("pointerdown", this.onPointerDown, true);
+		this.doc.addEventListener("pointermove", this.onPointerMove, true);
+		this.doc.addEventListener("pointerup", this.onPointerEnd, true);
+		this.doc.addEventListener("pointercancel", this.onPointerEnd, true);
+		for (const t of DISMISS_COMPAT_EVENTS) {
+			this.doc.addEventListener(t, this.onCompat, { capture: true, passive: false });
+		}
+	}
+
+	clear(): void {
+		if (this.timer) {
+			window.clearTimeout(this.timer);
+			this.timer = 0;
+		}
+		if (!this.armed) return;
+		this.armed = false;
+		this.activePointerId = null;
+		this.armedEvent = null;
+		this.doc.removeEventListener("pointerdown", this.onPointerDown, true);
+		this.doc.removeEventListener("pointermove", this.onPointerMove, true);
+		this.doc.removeEventListener("pointerup", this.onPointerEnd, true);
+		this.doc.removeEventListener("pointercancel", this.onPointerEnd, true);
+		for (const t of DISMISS_COMPAT_EVENTS) {
+			this.doc.removeEventListener(t, this.onCompat, true);
+		}
+	}
+
+	private readonly onPointerDown = (e: PointerEvent): void => {
+		if (e === this.armedEvent) return;
+		this.clear();
+	};
+
+	private readonly onPointerMove = (e: PointerEvent): void => {
+		if (this.activePointerId === null || e.pointerId !== this.activePointerId) return;
+		if (e.cancelable) e.preventDefault();
+		e.stopPropagation();
+	};
+
+	private readonly onPointerEnd = (e: PointerEvent): void => {
+		if (this.activePointerId === null || e.pointerId !== this.activePointerId) return;
+		if (e.cancelable) e.preventDefault();
+		e.stopPropagation();
+		if (e.type === "pointercancel") {
+			this.clear();
+			return;
+		}
+		this.activePointerId = null;
+		if (this.timer) window.clearTimeout(this.timer);
+		this.timer = window.setTimeout(() => this.clear(), DISMISS_SUPPRESS_MS);
+	};
+
+	private readonly onCompat = (e: Event): void => {
+		if (e.cancelable) e.preventDefault();
+		e.stopPropagation();
+		if (this.activePointerId === null && (e.type === "click" || e.type === "auxclick" || e.type === "contextmenu")) {
+			this.clear();
+		}
+	};
 }
