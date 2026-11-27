@@ -66,9 +66,9 @@ export interface PageGuideLayout {
 
 const GUIDE_CFG: Readonly<Record<Exclude<PageGuideFormat, "off">, { pageSize: string; landscape: boolean; label: string }>> = {
 	A4: { pageSize: "A4", landscape: false, label: "A4" },
-	"A4-landscape": { pageSize: "A4", landscape: true, label: "A4 Querformat" },
+	"A4-landscape": { pageSize: "A4", landscape: true, label: "A4 landscape" },
 	A3: { pageSize: "A3", landscape: false, label: "A3" },
-	"A3-landscape": { pageSize: "A3", landscape: true, label: "A3 Querformat" },
+	"A3-landscape": { pageSize: "A3", landscape: true, label: "A3 landscape" },
 	Letter: { pageSize: "Letter", landscape: false, label: "Letter" },
 };
 
