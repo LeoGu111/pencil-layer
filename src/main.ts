@@ -779,7 +779,7 @@ class PencilSettingTab extends PluginSettingTab {
 		// [Stage D]
 		new Setting(containerEl)
 			.setName("Include ink in PDF export (this device)")
-			.setDesc("Draw the ink in Obsidian's \"Export to PDF\". The commands \"Export to PDF with ink\" / \"without ink\" set this and start the export.")
+			.setDesc("Draw the ink in Obsidian's \"Export to PDF\". The one-off commands \"Export to PDF with ink\" / \"without ink\" leave this setting unchanged.")
 			.addToggle((t) => t.setValue(s.includeInkInPdf).onChange((v) => this.plugin.updateSettings({ includeInkInPdf: v })));
 		new Setting(containerEl)
 			.setName("Page boundary guides (A4 / A3)")

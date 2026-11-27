@@ -14,9 +14,11 @@ Ink Pages is a standalone Obsidian plugin based on [Pencil Layer](https://github
   - [Highlighter](#highlighter)
   - [Eraser](#eraser)
   - [Lasso and its menu](#lasso-and-its-menu)
-  - [Shapes (draw and hold)](#shapes-draw-and-hold)
-  - [Scribble to erase and double-tap](#scribble-to-erase-and-double-tap)
-  - [Drawing spaces](#drawing-spaces)
+  - [Shapes, ruler, set square, and compass](#shapes-ruler-set-square-and-compass)
+  - [Scribble to erase and Pencil gestures](#scribble-to-erase-and-pencil-gestures)
+  - [Page boundary guides, extra blank pages, and zoom](#page-boundary-guides-extra-blank-pages-and-zoom)
+  - [Formulas (LaTeX)](#formulas-latex)
+  - [Gemini AI assistant](#gemini-ai-assistant)
   - [Ink and text together](#ink-and-text-together)
   - [Screenshots](#screenshots)
   - [Reading view and PDF export](#reading-view-and-pdf-export)
@@ -34,18 +36,20 @@ Ink Pages is a standalone Obsidian plugin based on [Pencil Layer](https://github
 
 ## Features
 
-- **The pen always draws, the finger always scrolls.** An Apple Pencil, Surface Pen or other active stylus draws. Touch scrolls and taps as usual. The keyboard keeps typing at the cursor, and drawing never moves the cursor or takes focus.
+- **The pen always draws, the finger always scrolls.** An Apple Pencil, Surface Pen or other active stylus draws. Touch scrolls, pinch-zooms, and taps as usual (tap empty space to place the typing caret). The keyboard keeps typing at the cursor, and drawing never moves the cursor or takes focus.
 - **Ink follows your text.** Strokes are anchored to the line they were drawn on, and ink drawn over words stays on those words when the paragraph re-wraps.
-- **Floating toolbar.** It has undo and redo, pen, eraser, highlighter and lasso, pen presets and colors, and a ⋯ menu. You can drag it to any edge, collapse it, or snap it to a preset position.
-- **Pen.** Thin, dashed and thick presets, seven colors, a constant-width ballpoint or pressure-sensitive feel, and adjustable smoothing.
-- **Highlighter.** Four neon colors in two widths. It snaps to typed text, so a sweep over a sentence becomes a clean highlight that reflows with the text. It also has an optional straight-line mode.
+- **Floating toolbar.** It has undo and redo, pen, eraser, highlighter, lasso, ruler/set square/compass, geometry & page guides, Formula mode (`fx`), Gemini AI assistant, pen presets and colors, and a ⋯ menu. You can drag it to any edge, collapse it, or snap it to a preset position.
+- **Pen.** Thin, dashed and thick presets, seven colors, five pen feels (**Ballpoint**, **Fountain pen**, **Pencil**, **Marker**, **Calligraphy**), **Tilt shading (Neigung)**, and adjustable smoothing.
+- **Highlighter.** Four neon colors in two widths. It snaps to typed text, so a sweep over a sentence becomes a clean highlight that reflows with the text. It also has an optional straight-line mode and tilt shading.
 - **Eraser.** Erases whole strokes, or only the part you touch (precise mode, three sizes). It can be limited to the highlighter. A pen's eraser end (Surface Pen, many Wacom pens) erases while you hold it.
-- **Lasso.** Select ink, then move, resize, copy, cut, paste, duplicate, delete, recolor or screenshot it, or turn it into a drawing space.
-- **Shapes.** Draw and hold to snap a stroke to a line, arrow, rectangle, triangle, polygon, ellipse or circle, right angle, polyline, arc, parabola or smooth curve. Keep the pen down to adjust it.
-- **Geometry tools.** Tap the **Geometry** button (shapes icon) next to the lasso. Choose a shape and drag to size it, turn on the set square and start close to an edge, or use the compass to guide circular arcs. Move either guide by its round grip. Use the geometry menu to rotate the set square or change the compass radius.
-- **Scribble to erase** and **double-tap to toggle the eraser** (both optional).
-- **Drawing spaces.** Protected blank areas between paragraphs for diagrams. They grow as you draw near the bottom, can be resized, and move with their paragraph. Drawing below the end of a note creates one automatically.
-- **Reading view and PDF export.** Ink renders in Reading view and in Obsidian's "Export to PDF". You can export with or without ink, and tall drawings are split cleanly across pages on white paper.
+- **Lasso.** Select ink, then move, resize, copy, cut, paste, duplicate, delete, recolor, convert **To LaTeX**, ask Gemini (**Frag KI**), or take a **Screenshot**.
+- **Shapes (draw and hold) & Geometry.** Draw and hold to snap a stroke to a line, arrow, rectangle, triangle, polygon, ellipse or circle, right angle, polyline, arc, parabola or smooth curve, or pick a fixed shape mode from the **Geometry** button.
+- **Ruler, set square, and compass.** Snap strokes cleanly along a straight ruler (`Lineal`), 45° set square (`Geodreieck`), or compass (`Zirkel`) with drag-to-move, angle/radius grips, and two-finger rotation.
+- **Scribble to erase and Pencil gestures.** Scribble over strokes to erase them (on by default), and configure double-tap or bridged Apple Pencil Pro squeeze actions.
+- **Page boundary guides & pinch-to-zoom.** Dashed A4 / A4 landscape / A3 / A3 landscape / Letter sheet guides match PDF export dimensions, **Add blank page space** extends scrollable space below a note, and two-finger pinch zooms 50%–300% while keeping text, ink, guides, and rulers aligned.
+- **Formulas (LaTeX).** Handwrite equations and convert them into `$...$` / `$$...$$` LaTeX automatically in **Formula mode** (`fx`) or from the lasso menu — offline out of the box, or optionally with Gemini / OpenAI Vision.
+- **Gemini AI assistant.** Ask Gemini about your note or a handwritten lasso selection from the toolbar or lasso menu (desktop Google AI Pro sidebar, mobile clipboard handoff, or optional Gemini API key).
+- **Reading view and PDF export.** Ink renders in Reading view and in Obsidian's "Export to PDF". You can export with or without ink, and tall drawings below the end of a note split cleanly across pages on white paper.
 - **Document-style PDFs.** One tap exports a note that looks like a plain word-processor document (Times New Roman or Calibri at 12 pt, black headings, simple tables), whatever your theme. Handy for handing in homework.
 - **Dark-mode-aware ink.** Black ink turns light in dark themes, and white ink turns dark in light themes. PDFs always print dark ink on white paper.
 - **Screenshots** of a selection, with or without the text underneath. You can share them, copy them, save them to the vault or insert them into the note.
@@ -88,7 +92,7 @@ Install the plugin on each device (or let Obsidian Sync sync your plugins: **Set
 ## Getting started
 
 1. Open a note in the editor (Live Preview or Source mode). The floating toolbar appears at the bottom of the note.
-2. **Write with your pen** anywhere on the note. Scroll with your finger. Type with the keyboard as usual, because the cursor stays where it was.
+2. **Write with your pen** anywhere on the note. Scroll with your finger (or pinch with two fingers to zoom). Type with the keyboard as usual, because the cursor stays where it was.
 3. Pick a tool on the toolbar. **Tap the active tool again** to open its options.
 4. Use **Undo / Redo** on the toolbar for ink. Editor undo (Ctrl/Cmd+Z) undoes text.
 
@@ -99,7 +103,7 @@ On a computer without a pen, open the toolbar's **⋯ → Mouse draws** to draw 
 ### The toolbar
 
 ```
-( grip | undo  redo | pen  eraser  highlighter  lasso | presets & colors | ⋯ )
+( grip | undo  redo | pen  eraser  highlighter  lasso  ruler  geometry  fx  ai | presets & colors | ⋯ )
 ```
 
 - **Move it** by dragging the grip (the dotted handle). Near the left or right edge it turns vertical, and near the top or bottom it turns horizontal.
@@ -107,13 +111,16 @@ On a computer without a pen, open the toolbar's **⋯ → Mouse draws** to draw 
 - **Hold the grip** (pen or finger, half a second) or **right-click it** to snap the bar to Top center, Bottom center, Left middle, Right middle, or a corner.
 - **Tool popovers.** The first tap selects a tool. A tap on the already-active tool opens its options.
 - **⋯ menu:**
-  - Add drawing space
+  - Gemini KI-Assistent fragen (open Gemini AI assistant)
+  - Weitere Seite anhängen (+ Platz) (add extra scrollable page space below the note)
   - Hide ink / Show ink
   - Include ink in PDF export (toggle)
   - Export PDF with ink / Export PDF without ink
   - Export PDF (document style), or Export PDF (themed style) when your default export style is Document
   - Mouse draws (desktop only)
   - Move toolbar to bottom center (when it has been moved)
+  - Zoom controls (`−`, current percentage / reset to `100%`, `+`)
+  - Page boundary guides (`Off`, `A4`, `A4 ↔`, `A3`, `A3 ↔`, `Letter`)
 - The toolbar's position, edge and collapsed state are saved per device. The toolbar is hidden in Reading view. To hide it entirely, use the ribbon icon (pencil), the **Toggle ink toolbar** command, or the settings.
 
 ### Pen
@@ -121,7 +128,9 @@ On a computer without a pen, open the toolbar's **⋯ → Mouse draws** to draw 
 - **Presets:** Thin (about 0.3 mm), Dashed, and Thick (about 0.5 mm). You can change the widths in the settings.
 - **Colors:** Black, Red, Blue, Orange, Purple, Green and Coral. "Black" is the theme's text color: black in light themes and light in dark themes.
 - **Pen popover:**
-  - **Feel:** *Ballpoint* (constant width) or *Fountain pen* (pressure and speed vary the width, with soft tapered ends). Dashed is always ballpoint.
+  - **Pen type:** *Ballpoint* (constant width), *Fountain* (pressure and speed vary the width, with soft tapered ends), *Pencil* (soft graphite shading with tilt), *Marker* (bold smooth felt-tip), or *Calligraphy* (high-contrast ribbon). Dashed is always ballpoint.
+  - **Tilt shading (Neigung):** Tilting the Apple Pencil widens strokes for shading.
+  - **Formula mode (auto LaTeX):** Quick toggle for handwriting-to-LaTeX conversion.
   - **Smoothing:** Off, Light, Medium (default) or Strong. It filters jitter while you write. Lines are always drawn as smooth curves.
   - **Snap to shape (draw and hold)** on or off, and **Hold for** 0.3, 0.5, 0.8 or 1.2 s.
 
@@ -139,7 +148,7 @@ On a computer without a pen, open the toolbar's **⋯ → Mouse draws** to draw 
 - **Erase highlighter only** leaves pen ink alone.
 - **Eraser end of the pen** (Surface Pen, many Wacom/Windows Ink pens) erases while held, whatever tool is selected.
 - One eraser drag is one undo step.
-- The eraser popover also has the two quick-switch options: **Double-tap with the Pencil tip** and **Scribbling over ink** (see below).
+- The eraser popover also has the quick-switch options: **Double-tap with the Pencil tip** (and **Double-tap action**) and **Scribbling over ink** (see below).
 
 ### Lasso and its menu
 
@@ -152,13 +161,16 @@ With a selection:
   - **Copy** and **Cut** put the ink on the plugin's clipboard. A PNG also goes to the system clipboard when possible.
   - **Duplicate** and **Delete**
   - **Color ▸** recolors the selection.
+  - **To LaTeX** converts selected handwritten math into LaTeX (`$...$` / `$$...$$`).
+  - **Frag KI** sends a PNG of the selection plus note context to the Gemini AI assistant.
   - **Screenshot** opens the [screenshot](#screenshots) dialog.
-  - **Make drawing space** turns line-anchored ink into a [drawing space](#drawing-spaces) exactly where it is. It is shown when the selection has ink outside a space.
 - **Paste:** with the lasso tool and copied ink, tap on empty space, or hold the pen still for half a second, then choose **Paste**. The ink is pasted centered on that spot and selected.
 
 The ink clipboard lasts for the session and works across notes.
 
-### Shapes (draw and hold)
+### Shapes, ruler, set square, and compass
+
+#### Draw and hold (shape snapping)
 
 Draw a shape and **keep the pen still** at the end (0.5 s by default). The stroke snaps to a clean shape:
 
@@ -168,33 +180,46 @@ Draw a shape and **keep the pen still** at the end (0.5 s by default). The strok
 
 **While the pen stays down** you can adjust the shape. A line or arrow end follows the pen, and closed shapes scale from the opposite corner. Lift to keep it. Handwriting, check marks and "V"s are not turned into shapes. Snapping applies to the pen only and can be turned off in the pen popover or in the settings.
 
-### Scribble to erase and double-tap
+#### Geometry button
 
-- **Scribble to erase** (off by default): scribble quickly back and forth over strokes to erase them. It is conservative. A stroke is erased only when about half of it is scribbled over, and outlines around shading or axes running through it are kept. While you scribble, the strokes about to be erased fade. If nothing qualifies, the scribble stays as ink. One scribble is one undo step.
-- **Double-tap toggles eraser** (off by default): two very quick taps with the pen tip at the same spot switch between the current tool and the eraser, and the taps leave no dots. Taps next to ink you wrote in the last 1.5 s never count, so dotting an *i* doesn't switch tools. The **Toggle eraser** command does the same; you can assign it a hotkey.
+Tap the **Geometry** button (shapes icon) to pick an explicit shape drawing mode (**Freehand**, **Line**, **Arrow**, **Rectangle**, **Ellipse**, **Triangle**, **Circle**), toggle **Lineal**, **Geodreieck**, or **Zirkel**, or switch **Page limits (PDF preview)**.
 
-### Drawing spaces
+#### Ruler, set square, and compass
 
-A drawing space is a protected blank area after a paragraph, made for diagrams. Text never flows under it, its drawing is one rigid piece that never gets squished, and it moves with its paragraph.
+Tap the **Ruler** button (ruler icon) to activate the straight ruler (`Lineal`), or tap again to switch between **Aus**, **Lineal**, **Geodreieck** (45° set square), and **Zirkel** (compass):
 
-- **Add one:** use **⋯ → Add drawing space**, or the command **Add drawing space below cursor line**. The space goes after the paragraph (or list item, table, code block…) that has the cursor. No text is inserted.
-- **Draw below the end of the note:** a stroke that starts below the last line automatically creates a space there, or grows the last one.
-- **Grow:** draw near the bottom of a space (within about 40 px) and it grows while you draw, pushing the text below down. The stroke and the growth are one undo step.
-- **Resize:** drag the grip centered on the space's bottom edge (pen, finger or mouse). It can't shrink smaller than its drawing.
-- **The ⋯ button** at a space's top right has:
-  - **Copy** / **Cut** the space with its drawing. Paste it with Ctrl/Cmd+V (or Paste on iPad) in the editor, or with the command **Paste drawing below cursor line**.
-  - **Clear ink**
-  - **Delete space** (asks first if it has ink; undo brings it back)
-- **Make drawing space** (lasso menu) converts an existing loose drawing into a space without moving it.
-- **A4 drawing spaces** is an optional setting. New spaces have the printable height of a portrait A4 page at 100% with default margins. To print them at that size, select **A4**, **Portrait**, and **100%** in Obsidian's PDF export. Existing spaces and drawings keep their dimensions when you change the setting.
-- Blank lines directly below a space belong to it: drawing there grows the space.
-- **Typing below a drawing at the end of the note:** tap or click below it, or press ↓ on the last line, and a new line opens under the drawing.
-- **Moving drawings with text:** select text that includes a drawing space and cut and paste it. The drawing moves with the text, like an inline image, and editor undo undoes both together.
+- **Lineal & Geodreieck:** Draw near an edge to snap straight strokes cleanly along it (strokes can extend past either end). Drag the guide body or center grip to move it, drag the rotation handle or use two fingers to rotate (with magnetic angle snapping), or pick `0°`, `30°`, `45°`, `90°`, or `±5° / ±15°` steps in the popover.
+- **Zirkel (Compass):** Drag the center grip to move, drag the outer grip (or pick `S / M / L / XL` in the popover) to set the radius, and draw near the ring to snap circular arcs.
+
+### Scribble to erase and Pencil gestures
+
+- **Scribble to erase** (on by default): scribble quickly back and forth over strokes to erase them. It is conservative: a stroke is erased only when about half of it is scribbled over, and outlines around shading or axes running through it are kept. While you scribble, the strokes about to be erased fade. If nothing qualifies, the scribble stays as ink. One scribble is one undo step.
+- **Double-tap with the Pencil tip** (off by default on desktop; enabled on first iOS run): two very quick taps with the pen tip at the same spot trigger the configured **Double-tap action** (**Toggle eraser**, **Previous tool**, **Toggle tool palette**, or **Undo ink**), and the taps leave no dots. Taps next to ink you wrote in the last 1.5 s never count, so dotting an *i* doesn't switch tools.
+- **Apple Pencil Pro squeeze / native bridge:** If a native host bridge forwards `UIPencilInteraction` events (`doubleTap` / `squeeze`), Ink Pages maps them to **Double-tap action** and **Apple Pencil Pro squeeze action**. Because iPadOS `WKWebView` does not expose hardware barrel squeeze or barrel double-tap to Obsidian JS plugins natively, use screen tip double-tap, toolbar buttons, or commands.
+
+### Page boundary guides, extra blank pages, and zoom
+
+- **Page boundary guides:** Dashed sheet edges and page-break lines (`A4`, `A4 ↔`, `A3`, `A3 ↔`, `Letter`, or `Off`; `A4` by default) match Obsidian's PDF export dimensions so diagrams stay inside printable pages. Switch via **⋯**, the **Geometry** popover, **Settings**, or the **Cycle page boundary guides** command.
+- **Extra blank pages:** You can draw freely below the last line of any note — the canvas expands automatically. Use **⋯ → Weitere Seite anhängen (+ Platz)** or the **Add blank page space below note** command to append extra scrollable room at the bottom.
+- **Zoom:** Pinch with two fingers (50%–300%), use Ctrl/Cmd+Wheel on desktop, or use the **⋯** zoom controls and **Zoom page in / out / Reset page zoom (100%)** commands. Text, ink, page guides, and rulers share a single zoom transform so alignment stays locked.
+
+### Formulas (LaTeX)
+
+- **Formula mode (`fx`):** Toggle **Formula mode** on the toolbar (or in the Pen popover, or via **Toggle formula mode (handwrite to LaTeX)**). After pausing for the configured delay (default `1200 ms`), handwritten strokes are recognized and shown in a confirmation bar where you can edit the LaTeX, send it to Gemini, insert `$...$` / `$$...$$` into the note, or keep your handwriting.
+- **From a selection:** Select an equation with the lasso and tap **To LaTeX** (or run **Convert selected ink formula to LaTeX**).
+- **Recognizer:** Works 100% offline out of the box (digits, fractions, square roots, superscripts/subscripts, integrals, sums, Greek symbols, and German handwriting variants). Optionally switch to **Gemini Vision API** or **OpenAI Vision API** in **Settings → Formulas (LaTeX)**.
+
+### Gemini AI assistant
+
+- Open from the **sparkles** button on the toolbar, **⋯ → Gemini KI-Assistent fragen**, **Frag KI** in the lasso menu (attaches a PNG of the selected handwriting), or the commands **Open Gemini AI assistant** and **Open Gemini account sidebar (Google AI Pro)**.
+- **Desktop:** Open the embedded Google Gemini sidebar (`https://gemini.google.com/app` in a persistent session so you can sign in with your Google AI Pro account without an API key), or use the assistant modal.
+- **iPad / mobile & modal:** 1-tap clipboard handoff copies your handwritten selection image or question + note context and opens Google AI Pro (`gemini.google.com/app`, handy in Split View / Slide Over). Optionally paste a local Google AI Studio API key in settings for direct in-app replies using Gemini 4 (`Hydrogen`, `Neon`, `Argon`, `Carbon`) or `Gemini 3.8 Flash`.
 
 ### Ink and text together
 
 - Ink anchored to a line moves with that line when you type or delete above it. If the line itself is edited or moved, the ink finds it again by its content.
 - Ink drawn over words (an arrow pointing at a word, a circle around a term) stays on those words when the paragraph re-wraps at another window width.
+- Tap empty space with a finger (or click passively) to place the typing caret at that position (`tapToType`), even below the last line of the note.
 - Keep **Readable line length** on (Obsidian's Editor settings) so drawings line up the same way on every device.
 
 ### Screenshots
@@ -206,10 +231,10 @@ Choose **Screenshot** in the lasso menu to open a dialog with a crop frame aroun
 
 ### Reading view and PDF export
 
-- Ink shows in **Reading view**, placed next to the same blocks as in the editor. Drawings below a paragraph get room so they don't cover the next block.
+- Ink shows in **Reading view**, placed next to the same blocks as in the editor. Ink below a paragraph or below the end of the note gets room so it doesn't cover the next block.
 - **Export to PDF:** Obsidian's own **Export to PDF** includes ink when **Include ink in PDF export** is on (the default, per device). For a single export, use **⋯ → Export PDF with ink / without ink** or the commands of the same name. They don't change the toggle.
 - **Document style:** **⋯ → Export PDF (document style)** (or the command **Export to PDF (document style)**) exports this one note like a plain Word document: white page, black text in a classic font at 12 pt with 1.15 line spacing, plain black headings, black underlined links, thin black table borders, code in a monospace font on light grey, callouts and quotes as simple boxes without colors or icons, tags as plain text, thin grey horizontal rules, `==highlights==` in light yellow, and math in black at the text size. It ignores your theme and CSS snippets for that export only; your notes and Obsidian look unchanged. Ink follows the **Include ink in PDF export** toggle and is placed against the document-style text, so marks over words stay on their words. Pick the font (Serif = Times New Roman, Sans = Calibri) under **Document style font**. If you want every export to look like this, set **Default export style** to **Document**: Obsidian's own Export to PDF and the with/without-ink entries then use it, and the menu offers **Export PDF (themed style)** instead.
-- PDFs are always **white paper with dark ink**, whatever your theme. Drawing spaces taller than a page are split between rows of writing, never through them, and a space that doesn't fit at the bottom of a page moves to the next page.
+- PDFs are always **white paper with dark ink**, whatever your theme. Tall drawings below the end of a note are split cleanly across pages between strokes.
 
 ### Dark mode
 
@@ -217,7 +242,7 @@ Stored colors never change; what is painted follows the theme. "Black" ink (and 
 
 ### Desktop: mouse, Select tool and keyboard shortcuts
 
-On a computer the mouse reads by default, and the toolbar is the **slim** bar: Undo, Redo, **Select**, Show/Hide ink, ⋯.
+On a computer the mouse reads by default, and the toolbar is the **slim** bar: Undo, Redo, **Select**, AI assistant, Show/Hide ink, ⋯.
 
 - **Pens always draw.** The first time a pen (Surface Pen, Wacom…) touches a note, that device switches to the full drawing toolbar. The setting **Pen on this device** controls this.
 - **Mouse draws** (⋯ menu, settings, or the **Toggle mouse draws** command) makes the left mouse button draw and shows the full toolbar.
@@ -248,10 +273,18 @@ All commands are in the command palette, and none has a default hotkey. You can 
 | Toggle ink toolbar | Show or hide the toolbar on this device |
 | Show/hide ink | Hide ink without deleting it |
 | Undo ink / Redo ink | Ink history of the current note |
-| Add drawing space below cursor line | New drawing space after the cursor's block |
-| Paste drawing below cursor line | Paste a copied/cut drawing space |
 | Select pen / highlighter / eraser / lasso | Switch tools |
 | Toggle eraser | Current tool ↔ eraser |
+| Switch to previous tool | Switch back to the previous drawing tool |
+| Toggle quick tool palette | Open or close the quick tool palette popover |
+| Toggle formula mode (handwrite to LaTeX) | Enable or disable automatic handwriting-to-LaTeX |
+| Convert selected ink formula to LaTeX | Recognize and convert the current lasso selection |
+| Cycle page boundary guides (A4 / A3 / Off) | Cycle sheet boundary overlay format |
+| Toggle straight ruler (Lineal) | Show or hide the straight ruler |
+| Add blank page space below note | Append extra scrollable page space at the bottom |
+| Zoom page in / Zoom page out / Reset page zoom (100%) | Adjust editor page zoom |
+| Open Gemini AI assistant | Open the Gemini assistant modal for the active note |
+| Open Gemini account sidebar (Google AI Pro) | Open the embedded Gemini sidebar pane (desktop) |
 | Export to PDF with ink / without ink | One-off PDF export |
 | Export to PDF (document style) / (themed style) | One-off PDF export in that style (ink per the toggle) |
 | Toggle select tool (mouse selects ink) | Desktop, slim toolbar |
@@ -265,18 +298,29 @@ All commands are in the command palette, and none has a default hotkey. You can 
 | --- | --- | --- | --- |
 | Show ink toolbar on this device | On | This device | The floating toolbar. |
 | Show ink | On | Synced | Hide ink without deleting it. |
-| Include ink in PDF export | On | This device | Whether Obsidian's own "Export to PDF" draws ink. |
+| Include ink in PDF export | On | This device | Whether Obsidian's own "Export to PDF" draws ink; one-off export commands leave it unchanged. |
+| Page boundary guides (A4 / A3) | A4 | This device | Dashed sheet limits (`Off`, `A4`, `A4 ↔`, `A3`, `A3 ↔`, `Letter`). |
 | Default export style | Themed | Synced | Themed (looks like Obsidian) or Document (plain word-processor look) for Obsidian's own export and "Export PDF with / without ink". |
 | Document style font | Serif | Synced | Serif (Times New Roman, Times, Georgia) or Sans (Calibri, Aptos, Carlito, Arial) for document-style PDFs. |
-| Mouse draws | Off | This device, desktop | Draw with the left mouse button. |
+| Mouse draws | Off | This device, desktop | Draw with the primary mouse button. |
 | Pen on this device | Off (turns on when a pen is used) | This device, desktop | Full drawing toolbar for a pen even when the mouse doesn't draw. |
-| Pen feel | Ballpoint | Synced | Ballpoint or Fountain pen (pressure-sensitive). |
+| Pen feel | Ballpoint | Synced | Ballpoint, Fountain pen, Pencil, Marker, or Calligraphy. |
+| Tilt shading (Neigung) | On | Synced | Tilting the Apple Pencil widens strokes for shading. |
 | Smoothing | Medium | Synced | Off, Light, Medium, Strong. |
 | Thin / Dashed / Thick width (px) | 1.6 / 1.6 / 2.7 | Synced | Widths of the pen presets, used for new strokes. |
 | Snap to shape | On | Synced | Draw and hold to snap to a shape. |
 | Hold delay (ms) | 500 | Synced | How long to hold still before snapping (200–1500). |
-| Double-tap toggles eraser | Off | Synced | Two quick pen-tip taps switch to or from the eraser. |
-| Scribble to erase | Off | Synced | Scribble over strokes to erase them. |
+| Double-tap with the Pencil tip | Off (On on iOS) | Synced | Two quick pen-tip taps trigger the configured double-tap action. |
+| Double-tap action | Toggle eraser | Synced | Toggle eraser, Previous tool, Toggle tool palette, or Undo ink. |
+| Apple Pencil Pro squeeze action | Toggle tool palette | Synced | Action when a bridged squeeze event arrives from the host. |
+| Gemini API-Key (lokal auf diesem Gerät) | Empty | This device | Optional Google AI Studio API key for direct in-app Gemini replies and Gemini Vision LaTeX. |
+| Gemini Modell | Gemini 4 Hydrogen | This device | Model used by the in-app Gemini AI assistant. |
+| Formula mode (auto LaTeX) | Off | This device | Automatically convert handwritten equations after a short pause. |
+| Auto-convert pause (ms) | 1200 | This device | Delay after the last stroke before converting (600–3500). |
+| LaTeX delimiters | Auto | This device | Auto (`$$` for fractions/roots/integrals, `$` inline), Inline (`$...$`), or Block (`$$...$$`). |
+| Formula recognizer | Built-in offline recognizer | This device | Built-in offline recognizer, Gemini Vision API, or OpenAI Vision API. |
+| Vision API key | Empty | This device | Optional per-device API key for Vision-LLM formula recognition. |
+| Scribble to erase | On | Synced | Scribble over strokes to erase them. |
 | Eraser | Whole stroke | This device | Whole stroke or Precise. |
 | Precise eraser size | Medium | This device | Small, Medium or Large. |
 | Erase highlighter only | Off | This device | The eraser skips pen ink. |
@@ -287,11 +331,11 @@ All commands are in the command palette, and none has a default hotkey. You can 
 | Ink folder | `Attachments/Ink` | Synced | Where ink files are stored (see below). |
 | Screenshot folder | `Attachments/Screenshots` | Synced | Where saved screenshots go. |
 
-The current tool, pen preset, colors and highlighter width are remembered too (synced).
+The current tool, pen preset, colors, highlighter width, and active guide angles/radius are remembered too.
 
 ## Where your ink is stored and how sync works
 
-- Each note with ink has one **sidecar file**: `<ink folder>/<path of the note>.json`. For example, `Courses/Physics/Week 3.md` → `Attachments/Ink/Courses/Physics/Week 3.md.json`. Your Markdown files are never changed by ink. The one exception is that **Make drawing space** may remove blank lines it replaces, as one editor undo step.
+- Each note with ink has one **sidecar file**: `<ink folder>/<path of the note>.json`. For example, `Courses/Physics/Week 3.md` → `Attachments/Ink/Courses/Physics/Week 3.md.json`. Drawing ink never modifies your Markdown files (explicit actions like **Insert into note** in Screenshots or **To LaTeX** insert at the cursor).
 - Renaming or moving a note moves its ink file. Deleting a note deletes its ink file, and deleting a folder moves its ink folder to the trash.
 - **Changing the ink folder:** enter a new folder under **Settings → Ink Pages → Files → Ink folder** and press **Change**. You can **move the existing ink files** there (recommended), or switch without moving, in which case old ink stays in the old folder and isn't shown. Pick a visible folder (not starting with `.`), because hidden folders are not indexed or synced.
 - **Sync:** ink files are ordinary vault files, so any sync (Obsidian Sync, iCloud, Dropbox, Syncthing, git…) carries them. With **Obsidian Sync**, enable **Sync → "All other file types"** so the `.json` files are included. When another device's ink arrives while a note is open, it is merged in live. Strokes are merged one by one, so drawing on two devices at once doesn't lose either side's ink.
@@ -316,15 +360,14 @@ The current tool, pen preset, colors and highlighter width are remembered too (s
 
 ## Known limitations
 
-- Ink is placed by line in the editor. **Reading view and PDF** place it by block, so inside complex blocks (callouts, tables, embeds, images inside paragraphs) ink can sit a few pixels differently. Drawing spaces are always exact.
-- A drawing space can't go inside a paragraph, table, code block or callout. It follows the block.
-- Loose (line-anchored) ink that crosses a page break in a PDF breaks wherever the browser breaks the block. Use a drawing space for diagrams you want to print.
+- Ink is placed by line in the editor. **Reading view and PDF** place it by block, so inside complex blocks (callouts, tables, embeds, images inside paragraphs) ink can sit a few pixels differently.
+- Loose (line-anchored) ink that crosses a page break inside a multi-line block breaks wherever the browser breaks the block. Use **Page boundary guides** to align diagrams cleanly with page breaks.
 - Width matters: keep **Readable line length** on so ink lines up across devices and window sizes. With it off, ink stays at its pixel position while the text re-wraps.
 - PDF export on iPad/iPhone has been tested less than on desktop.
 - In a document-style PDF the text is usually smaller and more tightly spaced than in the editor, but ink keeps the size you drew it at. Marks follow their words and lines, yet a big circle around a phrase can overlap the line above or below it. The Sans font is closer in width to Obsidian's default font.
+- iPadOS `WKWebView` does not expose hardware Apple Pencil barrel Squeeze or Double-tap (`UIPencilInteraction`) to Obsidian JS plugins without a native bridge; use screen tip double-tap, toolbar buttons, or commands instead.
 - Undo history is not kept after closing a note or Obsidian.
-- Older versions of the plugin on another device may show drawing-space ink in the wrong place, so update every device.
-- Ink is not searchable text (no handwriting recognition).
+- Ink is not searchable text (no handwriting recognition outside optional LaTeX formula conversion).
 
 ## FAQ and troubleshooting
 

@@ -1117,8 +1117,7 @@
 	overflow: hidden !important;
 	mix-blend-mode: multiply;
 }
-.print .markdown-preview-view:has(.pl-reading-room),
-.print .markdown-preview-view:has(.pl-reading-space) {
+.print .markdown-preview-view:has(.pl-reading-room) {
 	padding-bottom: 0 !important;
 }
 
@@ -1165,8 +1164,7 @@ body.theme-light {
 	--pl-dark-ink: initial;
 	--pl-light-ink: #1a1a1a;
 }
-.print .pl-reading-ink,
-.print .pl-reading-space {
+.print .pl-reading-ink {
 	background: transparent !important;
 }
 .print,
@@ -1186,159 +1184,8 @@ body.theme-light {
 		--pl-dark-ink: initial;
 		--pl-light-ink: #1a1a1a;
 	}
-	.pl-reading-ink,
-	.pl-reading-space {
+	.pl-reading-ink {
 		background: transparent !important;
-	}
-}
-
-
-/* ---------- Stage K: drawing spaces (spaceView.ts, readingView.ts) ---------- */
-
-/* Editor: a space = a block widget of exactly its height (no margin/border in the box model:
-   CM measures it, and ink is placed at its top). The outline is drawn inside, by a shadow. */
-.cm-editor .pl-space {
-	display: block;
-	box-sizing: border-box;
-	margin: 0;
-	padding: 0;
-	border: none;
-	border-radius: 4px;
-	box-shadow: inset 0 0 0 1px var(--background-modifier-border);
-	background-color: color-mix(in srgb, var(--background-primary) 97%, var(--text-normal));
-	pointer-events: none;
-}
-
-/* Controls: a layer inside the scroller, above the text; only the buttons take events. */
-.pl-space-ctls {
-	position: absolute;
-	width: 0;
-	height: 0;
-	z-index: 6;
-	pointer-events: none;
-}
-
-/* 40 px touch targets around small, quiet faces. */
-.pl-space-ctl {
-	position: absolute;
-	min-width: 40px;
-	height: 40px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	pointer-events: auto;
-	cursor: pointer;
-	user-select: none;
-	-webkit-user-select: none;
-	-webkit-touch-callout: none;
-	touch-action: manipulation;
-}
-
-.pl-space-face {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	gap: 6px;
-	min-width: 28px;
-	height: 28px;
-	padding: 0 6px;
-	border-radius: 14px;
-	box-sizing: border-box;
-	font-family: var(--font-interface);
-	font-size: var(--font-ui-smaller);
-	white-space: nowrap;
-	color: var(--text-muted);
-	background-color: var(--background-primary);
-	border: 1px solid var(--background-modifier-border);
-	opacity: 0.6;
-	transition: opacity 120ms ease;
-}
-
-.pl-space-ctl:hover .pl-space-face,
-.pl-space-ctl:active .pl-space-face {
-	opacity: 1;
-	color: var(--text-normal);
-}
-
-.pl-space-face svg {
-	width: 16px;
-	height: 16px;
-}
-
-/* ⋯ menu: Clear ink / Delete space. */
-.pl-space-panel {
-	position: absolute;
-	width: 160px;
-	display: flex;
-	flex-direction: column;
-	padding: 4px;
-	border-radius: 10px;
-	background-color: var(--background-primary);
-	border: 1px solid var(--background-modifier-border);
-	box-shadow: var(--shadow-s);
-	pointer-events: auto;
-}
-
-.pl-space-panel .pl-space-ctl {
-	position: static;
-	justify-content: flex-start;
-}
-
-.pl-space-panel .pl-space-face {
-	border: none;
-	background: none;
-	opacity: 1;
-	color: var(--text-normal);
-	font-size: var(--font-ui-small);
-}
-
-.pl-space-panel .mod-warning .pl-space-face {
-	color: var(--text-error);
-}
-
-/* Resize handle: a grip centred on the bottom edge, 80 × 40 px target. */
-.pl-space-handle {
-	position: absolute;
-	width: 80px;
-	height: 40px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	pointer-events: auto;
-	cursor: ns-resize;
-	touch-action: none;
-	user-select: none;
-	-webkit-user-select: none;
-	-webkit-touch-callout: none;
-}
-
-.pl-space-grip {
-	width: 44px;
-	height: 6px;
-	border-radius: 3px;
-	background-color: var(--text-faint);
-	opacity: 0.5;
-	transition: opacity 120ms ease;
-}
-
-.pl-space-handle:hover .pl-space-grip,
-.pl-space-handle.is-dragging .pl-space-grip {
-	opacity: 1;
-	background-color: var(--interactive-accent);
-}
-
-/* Reading view / PDF: room of exactly the space's height (sizes are set inline too). */
-.pl-reading-space {
-	position: relative;
-	display: block;
-	margin: 0;
-	padding: 0;
-	pointer-events: none;
-}
-
-@media print {
-	.pl-space-ctls {
-		display: none !important;
 	}
 }
 
@@ -1401,13 +1248,6 @@ body.theme-light {
 	padding: 0 12px 4px;
 }
 
-/* A drawing space inside the text selection (Cut/Copy take it along), like a selected image. */
-.cm-editor .pl-space.is-selected {
-	background-color: var(--text-selection);
-	outline: 2px solid var(--interactive-accent);
-	outline-offset: -2px;
-}
-
 /* Generic hide (toggled from code instead of inline display styles). */
 .pl-hidden {
 	display: none !important;
@@ -1441,7 +1281,7 @@ body.theme-light {
    `:is(#pl-doc-style, .print.pl-doc-style)` — it matches by the class but counts as an id (1,0,x),
    which beats any class-based theme/snippet rule, !important against !important — and set
    properties directly (themes may redefine variables below the root). Math
-   (MathJax) and our ink/space blocks are left alone except for color/size. */
+   (MathJax) and our ink blocks are left alone except for color/size. */
 :is(#pl-doc-style, .print.pl-doc-style) {
 	--pl-doc-mono: Consolas, "Courier New", Courier, monospace;
 	--text-normal: #000000;
@@ -1485,7 +1325,7 @@ body.theme-light {
 }
 
 /* Everything inside: black text in the document font, no theme decoration. */
-:is(#pl-doc-style, .print.pl-doc-style) :where(*:not(mjx-container, mjx-container *, .pl-reading-ink, .pl-reading-ink *, .pl-reading-space, .pl-reading-space *, .pl-reading-room)) {
+:is(#pl-doc-style, .print.pl-doc-style) :where(*:not(mjx-container, mjx-container *, .pl-reading-ink, .pl-reading-ink *, .pl-reading-room)) {
 	color: #000000 !important;
 	-webkit-text-fill-color: currentColor !important;
 	font-family: var(--pl-doc-font) !important;
