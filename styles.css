@@ -130,8 +130,8 @@
 	--pl-btn: 36px;
 	--pl-color: 32px;
 	--pl-pad: 4px;
-	/* Options area (fixed for every tool): 3 presets + gap + 4 colors. */
-	--pl-opt-len: calc(3 * var(--pl-btn) + 2 * 2px + 4px + 4 * var(--pl-color));
+	/* Options area (fixed for every tool): 3 presets + gap + 7 colors (shrinks and scrolls on narrow leaves). */
+	--pl-opt-len: calc(3 * var(--pl-btn) + 2 * 2px + 4px + 7 * var(--pl-color));
 	--pl-tint: var(--background-modifier-hover);
 	--pl-glass: var(--background-primary);
 	--pl-glass-border: var(--background-modifier-border);
@@ -242,6 +242,8 @@
 	flex: 0 1 var(--pl-opt-len);
 	width: var(--pl-opt-len);
 	align-items: center;
+	justify-content: flex-start;
+	justify-content: safe center;
 	gap: 4px;
 	min-width: 0;
 	overflow: hidden;
@@ -385,15 +387,66 @@
 	opacity: 0.55;
 }
 
-/* Color strip: 4 circular swatches visible, the rest by (touch) scroll along the bar. */
-.ink-pages-toolbar .pl-strip {
+/* Color strip: shows all 7 swatches when room allows, shrinking with scroll + arrows on narrow leaves. */
+.ink-pages-toolbar .pl-strip-wrap {
 	display: flex;
 	flex: 0 1 auto;
+	align-items: center;
 	min-width: var(--pl-color);
-	max-width: calc(4 * var(--pl-color));
+	max-width: calc(7 * var(--pl-color));
+}
+
+.ink-pages-toolbar[data-orient="vertical"] .pl-strip-wrap {
+	flex-direction: column;
+	min-width: 0;
+	max-width: none;
+	min-height: var(--pl-color);
+	max-height: calc(7 * var(--pl-color));
+}
+
+.ink-pages-toolbar .pl-strip-nav {
+	display: none;
+	width: 20px;
+	min-width: 20px;
+	height: var(--pl-btn);
+	border-radius: 999px;
+	color: var(--text-muted);
+}
+
+.ink-pages-toolbar .pl-strip-nav:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.ink-pages-toolbar .pl-strip-nav svg.svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.ink-pages-toolbar .pl-strip-wrap.can-scroll-prev > .pl-strip-prev,
+.ink-pages-toolbar .pl-strip-wrap.can-scroll-next > .pl-strip-next {
+	display: flex;
+}
+
+.ink-pages-toolbar[data-orient="vertical"] .pl-strip-nav {
+	width: var(--pl-btn);
+	min-width: var(--pl-btn);
+	height: 20px;
+	min-height: 20px;
+}
+
+.ink-pages-toolbar[data-orient="vertical"] .pl-strip-nav svg.svg-icon {
+	transform: rotate(90deg);
+}
+
+.ink-pages-toolbar .pl-strip {
+	display: flex;
+	flex: 1 1 auto;
+	min-width: var(--pl-color);
+	max-width: calc(7 * var(--pl-color));
 	overflow-x: auto;
 	overflow-y: hidden;
-	scroll-snap-type: x mandatory;
+	scroll-snap-type: x proximity;
 	scrollbar-width: none;
 	overscroll-behavior: contain;
 	-webkit-overflow-scrolling: touch;
@@ -405,10 +458,10 @@
 	min-width: 0;
 	max-width: none;
 	min-height: var(--pl-color);
-	max-height: calc(4 * var(--pl-color));
+	max-height: calc(7 * var(--pl-color));
 	overflow-x: hidden;
 	overflow-y: auto;
-	scroll-snap-type: y mandatory;
+	scroll-snap-type: y proximity;
 	touch-action: pan-y;
 }
 
@@ -422,9 +475,29 @@
 	mask-image: linear-gradient(to right, #000 calc(100% - 10px), transparent);
 }
 
+.ink-pages-toolbar .pl-strip.is-scrollable-prev {
+	-webkit-mask-image: linear-gradient(to right, transparent, #000 10px);
+	mask-image: linear-gradient(to right, transparent, #000 10px);
+}
+
+.ink-pages-toolbar .pl-strip.is-scrollable.is-scrollable-prev {
+	-webkit-mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+	mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+}
+
 .ink-pages-toolbar[data-orient="vertical"] .pl-strip.is-scrollable {
 	-webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
 	mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
+}
+
+.ink-pages-toolbar[data-orient="vertical"] .pl-strip.is-scrollable-prev {
+	-webkit-mask-image: linear-gradient(to bottom, transparent, #000 10px);
+	mask-image: linear-gradient(to bottom, transparent, #000 10px);
+}
+
+.ink-pages-toolbar[data-orient="vertical"] .pl-strip.is-scrollable.is-scrollable-prev {
+	-webkit-mask-image: linear-gradient(to bottom, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+	mask-image: linear-gradient(to bottom, transparent, #000 10px, #000 calc(100% - 10px), transparent);
 }
 
 .ink-pages-toolbar .pl-color {
@@ -633,6 +706,18 @@
 .is-mobile .ink-pages-toolbar .pl-color-dot {
 	width: 26px;
 	height: 26px;
+}
+
+.is-mobile .ink-pages-toolbar .pl-strip-nav {
+	width: 24px;
+	min-width: 24px;
+}
+
+.is-mobile .ink-pages-toolbar[data-orient="vertical"] .pl-strip-nav {
+	width: var(--pl-btn);
+	min-width: var(--pl-btn);
+	height: 24px;
+	min-height: 24px;
 }
 
 .is-mobile .ink-pages-toolbar .pl-menu-item {
@@ -1362,6 +1447,15 @@ body.theme-light {
 }
 
 /* All colors visible, wrapped (no scrolling strip inside the popover). */
+.ink-pages-toolbar .pl-options.is-hosted .pl-strip-wrap {
+	max-width: none;
+	justify-content: center;
+}
+
+.ink-pages-toolbar .pl-options.is-hosted .pl-strip-nav {
+	display: none !important;
+}
+
 .ink-pages-toolbar .pl-options.is-hosted .pl-strip {
 	flex-direction: row;
 	flex-wrap: wrap;

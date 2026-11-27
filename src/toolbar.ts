@@ -34,6 +34,7 @@
 import { MarkdownView, setIcon, setTooltip } from "obsidian";
 import { cssColor } from "./inkView";
 import {
+	Bounds,
 	Orientation,
 	Rect,
 	SNAP_PRESETS,
@@ -45,6 +46,9 @@ import {
 	placePopover,
 	popoverSide,
 	snapPreset,
+	statusBarInset,
+	stripScrollState,
+	stripWheelDelta,
 	toFloatPos,
 } from "./floating";
 import { GRIP_LONG_PRESS_MS, GripPress } from "./grip";
@@ -175,11 +179,13 @@ export class InkToolbar {
 	/** Preset/width buttons and color buttons of the current options, keyed by value. */
 	private readonly variantBtns = new Map<string, { btn: HTMLElement; sample: SVGPathElement }>();
 	private readonly colorBtns = new Map<string, HTMLElement>();
+	private stripWrap: HTMLElement | null = null;
 	private strip: HTMLElement | null = null;
 	private caption: HTMLElement | null = null;
 	private popover: HTMLElement | null = null;
 	private popoverKind: PopoverKind | null = null;
 	private readonly resizeObs: ResizeObserver | null = null;
+	private observedStatusBar: HTMLElement | null = null;
 	private drag: DragState | null = null;
 	private longPressTimer = 0;
 	private layoutRaf = 0;
@@ -386,11 +392,30 @@ export class InkToolbar {
 	// Placement (floating, draggable, clamped inside the leaf's content area)
 	// -------------------------------------------------------------------------------------------
 
-	/** The area the bar may occupy (leaf below its view header), relative to the leaf. */
+	/** Bounds of Obsidian's `.status-bar` in this window (or null when absent/hidden). */
+	private statusBarBounds(): Bounds | null {
+		const sb = this.leafEl.ownerDocument.querySelector<HTMLElement>(".status-bar");
+		if (!sb) return null;
+		if (sb !== this.observedStatusBar) {
+			this.observedStatusBar = sb;
+			this.resizeObs?.observe(sb);
+		}
+		const style = this.leafEl.ownerDocument.defaultView?.getComputedStyle(sb);
+		if (style && (style.display === "none" || style.visibility === "hidden")) return null;
+		const r = sb.getBoundingClientRect();
+		return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+	}
+
+	/** The area the bar may occupy (leaf below its view header and clear of the status bar), relative to the leaf. */
 	private area(): { top: number; size: Size } {
 		const header = this.leafEl.querySelector<HTMLElement>(":scope > .view-header");
 		const top = header ? header.offsetTop + header.offsetHeight : 0;
-		return { top, size: { w: this.leafEl.clientWidth, h: Math.max(0, this.leafEl.clientHeight - top) } };
+		const leafRect = this.leafEl.getBoundingClientRect();
+		const bottomInset = statusBarInset(
+			{ left: leafRect.left, top: leafRect.top, right: leafRect.right, bottom: leafRect.bottom },
+			this.statusBarBounds(),
+		);
+		return { top, size: { w: this.leafEl.clientWidth, h: Math.max(0, this.leafEl.clientHeight - top - bottomInset) } };
 	}
 
 	private barSize(): Size {
@@ -418,6 +443,7 @@ export class InkToolbar {
 		const { top, size } = this.area();
 		if (size.w === 0 || this.el.offsetWidth === 0) return; // not rendered (hidden leaf / reading view)
 		this.applyMaxSize(size);
+		this.updateStripScroll();
 		const p = placeFloating(size, this.barSize(), this.host.getSettings().toolbarPos);
 		this.setPos(p.left, top + p.top);
 		if (this.popover) this.placePopoverEl(this.popover);
@@ -488,6 +514,7 @@ export class InkToolbar {
 				if (this.applyOrientation(edge)) {
 					// The bar changed shape: keep the grip under the pointer and continue from there.
 					this.applyMaxSize(size);
+					this.updateStripScroll();
 					const g = this.grip.getBoundingClientRect();
 					const r = this.el.getBoundingClientRect();
 					const gx = g.left + g.width / 2 - r.left;
@@ -571,6 +598,7 @@ export class InkToolbar {
 			this.optionsEl.empty();
 			this.variantBtns.clear();
 			this.colorBtns.clear();
+			this.stripWrap = null;
 			this.strip = null;
 			this.caption = null;
 			if (kind === "pen") {
@@ -653,20 +681,33 @@ export class InkToolbar {
 	}
 
 	private buildStrip(colors: readonly PaletteColor[], select: (c: string) => void): void {
-		const strip = this.optionsEl.createDiv({ cls: "pl-strip" });
-		strip.toggleClass("is-scrollable", colors.length > 4);
+		const wrap = this.optionsEl.createDiv({ cls: "pl-strip-wrap" });
+		const prevBtn = this.button(wrap, "chevron-left", "Scroll colors back", () => this.scrollStrip(-1));
+		prevBtn.addClasses(["pl-strip-nav", "pl-strip-prev"]);
+		const strip = wrap.createDiv({ cls: "pl-strip" });
 		const vertical = () => this.shownOrientation === "vertical";
 		// Desktop convenience: the wheel scrolls the strip along its axis.
 		strip.addEventListener(
 			"wheel",
 			(e) => {
-				if (vertical()) return; // native vertical scrolling
-				if (strip.scrollWidth <= strip.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
-				e.preventDefault();
-				strip.scrollLeft += e.deltaY;
+				const isVert = vertical();
+				const total = isVert ? strip.scrollHeight : strip.scrollWidth;
+				const client = isVert ? strip.clientHeight : strip.clientWidth;
+				const delta = stripWheelDelta(e.deltaX, e.deltaY, e.deltaMode, client, isVert);
+				if (!delta || total <= client) return;
+				if (!isVert) {
+					e.preventDefault();
+					strip.scrollLeft += delta;
+					this.updateStripScroll();
+				} else if (e.deltaMode !== 0) {
+					e.preventDefault();
+					strip.scrollTop += delta;
+					this.updateStripScroll();
+				}
 			},
 			{ passive: false },
 		);
+		strip.addEventListener("scroll", () => this.updateStripScroll(), { passive: true });
 		// The Pencil can't pan the strip natively (its touches are cancelled): scroll it by hand.
 		let pan: { id: number; x: number; y: number; left: number; top: number; active: boolean } | null = null;
 		strip.addEventListener("pointerdown", (e) => {
@@ -692,7 +733,43 @@ export class InkToolbar {
 			b.createSpan({ cls: "pl-color-dot" }).style.background = cssColor(c.value);
 			this.colorBtns.set(c.value, b);
 		}
+		const nextBtn = this.button(wrap, "chevron-right", "Scroll colors forward", () => this.scrollStrip(1));
+		nextBtn.addClasses(["pl-strip-nav", "pl-strip-next"]);
+		this.stripWrap = wrap;
 		this.strip = strip;
+	}
+
+	private scrollStrip(dir: -1 | 1): void {
+		const strip = this.strip;
+		if (!strip) return;
+		const isVert = this.shownOrientation === "vertical";
+		const client = isVert ? strip.clientHeight : strip.clientWidth;
+		const step = Math.max(32, Math.floor(client * 0.75));
+		if (typeof strip.scrollBy === "function") {
+			strip.scrollBy({ left: isVert ? 0 : dir * step, top: isVert ? dir * step : 0, behavior: "smooth" });
+		} else if (isVert) {
+			strip.scrollTop += dir * step;
+		} else {
+			strip.scrollLeft += dir * step;
+		}
+		this.updateStripScroll();
+	}
+
+	/** Show scroll arrows / edge fades only for sides of `.pl-strip` that currently overflow. */
+	private updateStripScroll(): void {
+		const strip = this.strip;
+		const wrap = this.stripWrap;
+		if (!strip || !wrap) return;
+		const isVert = this.shownOrientation === "vertical";
+		const { canPrev, canNext } = stripScrollState(
+			isVert ? strip.scrollTop : strip.scrollLeft,
+			isVert ? strip.clientHeight : strip.clientWidth,
+			isVert ? strip.scrollHeight : strip.scrollWidth,
+		);
+		wrap.toggleClass("can-scroll-prev", canPrev);
+		wrap.toggleClass("can-scroll-next", canNext);
+		strip.toggleClass("is-scrollable", canNext);
+		strip.toggleClass("is-scrollable-prev", canPrev);
 	}
 
 	/** Scroll the strip (not the page) so the selected color is visible. */
@@ -704,12 +781,14 @@ export class InkToolbar {
 		if (this.shownOrientation === "vertical") {
 			const top = active.offsetTop - strip.offsetTop;
 			if (top + active.offsetHeight > strip.scrollTop + strip.clientHeight || top < strip.scrollTop) strip.scrollTop = top;
+			this.updateStripScroll();
 			return;
 		}
 		const left = active.offsetLeft - strip.offsetLeft;
 		if (left + active.offsetWidth > strip.scrollLeft + strip.clientWidth || left < strip.scrollLeft) {
 			strip.scrollLeft = left;
 		}
+		this.updateStripScroll();
 	}
 
 	// -------------------------------------------------------------------------------------------
