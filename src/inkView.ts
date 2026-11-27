@@ -39,6 +39,8 @@ import {
 	pinchScale,
 	scrollForZoomAnchor,
 	wheelZoomFactor,
+	zoomSpacerSize,
+	zoomedSizerMarginLeft,
 } from "./zoom";
 import {
 	CurveBuilder,
@@ -472,6 +474,8 @@ export class InkView implements PluginValue {
 	private zoom = 1;
 	private sizerEl: HTMLElement | null = null;
 	private zoomBaseSizerWidth: number | null = null;
+	private zoomBaseCentered = false;
+	private lastZoomMarginLeft: number | null = null;
 	private zoomSpacer: HTMLElement | null = null;
 	private zoomBadge: HTMLElement | null = null;
 	private measuredLineTops: ReadonlyMap<number, number> | null = null;
@@ -955,6 +959,7 @@ export class InkView implements PluginValue {
 					this.syncCanvasRoom();
 					this.render(geo);
 					this.renderGuide();
+					this.syncZoomMargin();
 					this.updateZoomSpacer();
 				} finally {
 					this.measuredLineTops = null;
@@ -1210,8 +1215,14 @@ export class InkView implements PluginValue {
 	zoomBy(factor: number): void {
 		const sd = this.view.scrollDOM;
 		const r = sd.getBoundingClientRect();
-		const focal = { x: r.left + (sd.clientWidth || 400) / 2, y: r.top + (sd.clientHeight || 400) / 2 };
-		this.setZoom(this.zoom * factor, focal);
+		const anchorEl = this.sizerEl ?? this.zoomTargetEl() ?? this.view.contentDOM;
+		const aRect = anchorEl.getBoundingClientRect();
+		const scrollLeft = sd.scrollLeft || 0;
+		const focalY = r.top + (sd.clientHeight || 400) / 2;
+		// Keep the page's left edge visible when zooming in from scrollLeft = 0 (or while the left edge
+		// is still inside the viewport) so +/- commands never clip line starts off the left edge.
+		const focalX = scrollLeft > 0 && aRect.left <= r.left ? r.left : undefined;
+		this.setZoom(this.zoom * factor, { x: focalX, y: focalY });
 	}
 
 	zoomIn(): void {
@@ -1226,7 +1237,11 @@ export class InkView implements PluginValue {
 		this.setZoom(1);
 	}
 
-	setZoom(nextZoom: number, focalClient?: { x: number; y: number }, prevFocalClient?: { x: number; y: number }): void {
+	setZoom(
+		nextZoom: number,
+		focalClient?: { x?: number; y?: number },
+		prevFocalClient?: { x?: number; y?: number },
+	): void {
 		const target = clampZoom(nextZoom, ZOOM_MIN, ZOOM_MAX);
 		const prev = this.zoom;
 		const sd = this.view.scrollDOM;
@@ -1236,31 +1251,47 @@ export class InkView implements PluginValue {
 		const sizer = this.sizerEl ?? this.zoomTargetEl();
 		const anchorEl = sizer ?? this.view.contentDOM;
 		const beforeRect = anchorEl.getBoundingClientRect();
+		const sdCs = typeof getComputedStyle === "function" ? getComputedStyle(sd) : null;
+		const padL = parseFloat(sdCs?.paddingLeft ?? "") || 0;
 		if (prev === 1 && target !== 1 && anchorEl && anchorEl.offsetWidth > 0) {
 			this.zoomBaseSizerWidth = anchorEl.offsetWidth;
+			this.zoomBaseCentered = sizer ? (sizer.offsetLeft || 0) > padL + 1 : false;
 		} else if (target === 1) {
 			this.zoomBaseSizerWidth = null;
+			this.zoomBaseCentered = false;
 		}
 		this.zoom = target;
 		this.applyZoomDom();
-		if (focalClient && prev > 0) {
+		if (target === 1 && prev !== 1) {
+			sd.scrollLeft = 0;
+		} else if (focalClient && prev > 0) {
 			const ratio = target / prev;
 			const afterRect = anchorEl.getBoundingClientRect();
 			if ((beforeRect.width ?? 0) > 0 && (afterRect.width ?? 0) > 0) {
 				const pf = prevFocalClient ?? focalClient;
-				const curX = afterRect.left + (pf.x - beforeRect.left) * ratio;
-				const curY = afterRect.top + (pf.y - beforeRect.top) * ratio;
 				const sdScaleX = sd.offsetWidth > 0 && sRect.width > 0 ? sRect.width / sd.offsetWidth : 1;
 				const sdScaleY = sd.offsetHeight > 0 && sRect.height > 0 ? sRect.height / sd.offsetHeight : 1;
-				sd.scrollLeft = Math.max(0, sd.scrollLeft + (curX - focalClient.x) / sdScaleX);
-				sd.scrollTop = Math.max(0, sd.scrollTop + (curY - focalClient.y) / sdScaleY);
+				if (focalClient.x !== undefined) {
+					const pfX = pf.x ?? focalClient.x;
+					const curX = afterRect.left + (pfX - beforeRect.left) * ratio;
+					sd.scrollLeft = Math.max(0, sd.scrollLeft + (curX - focalClient.x) / sdScaleX);
+				}
+				if (focalClient.y !== undefined) {
+					const pfY = pf.y ?? focalClient.y;
+					const curY = afterRect.top + (pfY - beforeRect.top) * ratio;
+					sd.scrollTop = Math.max(0, sd.scrollTop + (curY - focalClient.y) / sdScaleY);
+				}
 			} else {
-				const fx0 = (prevFocalClient?.x ?? focalClient.x) - sRect.left;
-				const fy0 = (prevFocalClient?.y ?? focalClient.y) - sRect.top;
-				const fx1 = focalClient.x - sRect.left;
-				const fy1 = focalClient.y - sRect.top;
-				sd.scrollLeft = scrollForZoomAnchor(oldScrollLeft, fx0, ratio, fx1);
-				sd.scrollTop = scrollForZoomAnchor(oldScrollTop, fy0, ratio, fy1);
+				if (focalClient.x !== undefined) {
+					const fx0 = (prevFocalClient?.x ?? focalClient.x) - sRect.left;
+					const fx1 = focalClient.x - sRect.left;
+					sd.scrollLeft = scrollForZoomAnchor(oldScrollLeft, fx0, ratio, fx1);
+				}
+				if (focalClient.y !== undefined) {
+					const fy0 = (prevFocalClient?.y ?? focalClient.y) - sRect.top;
+					const fy1 = focalClient.y - sRect.top;
+					sd.scrollTop = scrollForZoomAnchor(oldScrollTop, fy0, ratio, fy1);
+				}
 			}
 		}
 		this.applyGeometry(this.readGeometry(this.view));
@@ -1281,6 +1312,34 @@ export class InkView implements PluginValue {
 		return null;
 	}
 
+	private computeZoomMarginLeft(sizer: HTMLElement): number {
+		const sd = this.view.scrollDOM;
+		const sdCs = typeof getComputedStyle === "function" ? getComputedStyle(sd) : null;
+		const padL = parseFloat(sdCs?.paddingLeft ?? "") || 0;
+		const padR = parseFloat(sdCs?.paddingRight ?? "") || 0;
+		const baseWidth = this.zoomBaseSizerWidth ?? sizer.offsetWidth;
+		return zoomedSizerMarginLeft({
+			containerWidth: sd.clientWidth || 0,
+			paddingLeft: padL,
+			paddingRight: padR,
+			baseWidth,
+			zoom: this.zoom,
+			centered: this.zoomBaseCentered,
+		});
+	}
+
+	private syncZoomMargin(): void {
+		if (this.zoom === 1) return;
+		const sizer = this.sizerEl ?? this.zoomTargetEl();
+		if (!sizer) return;
+		const marginLeft = this.computeZoomMarginLeft(sizer);
+		if (this.lastZoomMarginLeft !== null && Math.abs(marginLeft - this.lastZoomMarginLeft) < 0.5) return;
+		this.lastZoomMarginLeft = marginLeft;
+		sizer.setCssProps({
+			marginLeft: `${marginLeft}px`,
+		});
+	}
+
 	private applyZoomDom(): void {
 		const z = this.zoom;
 		const sizer = this.sizerEl ?? this.zoomTargetEl();
@@ -1292,14 +1351,29 @@ export class InkView implements PluginValue {
 				sizer.appendChild(this.svg);
 			}
 			sizer.classList.toggle("pl-zoom-target", z !== 1);
-			sizer.setCssProps({
-				transform: z === 1 ? "" : `scale(${z})`,
-				width: widthLock,
-				minWidth: widthLock,
-				maxWidth: widthLock,
-			});
+			if (z === 1) {
+				this.lastZoomMarginLeft = null;
+				sizer.setCssProps({
+					transform: "",
+					width: "",
+					minWidth: "",
+					maxWidth: "",
+					marginLeft: "",
+				});
+			} else {
+				const marginLeft = this.computeZoomMarginLeft(sizer);
+				this.lastZoomMarginLeft = marginLeft;
+				sizer.setCssProps({
+					transform: `scale(${z})`,
+					width: widthLock,
+					minWidth: widthLock,
+					maxWidth: widthLock,
+					marginLeft: `${marginLeft}px`,
+				});
+			}
 			this.svg.setCssProps({ transform: "" });
 		} else {
+			this.lastZoomMarginLeft = null;
 			const cd = this.view.contentDOM;
 			cd.classList?.toggle("pl-zoom-target", z !== 1);
 			cd.setCssProps?.({
@@ -1316,10 +1390,18 @@ export class InkView implements PluginValue {
 	private resetZoomDom(): void {
 		this.zoom = 1;
 		this.zoomBaseSizerWidth = null;
+		this.zoomBaseCentered = false;
+		this.lastZoomMarginLeft = null;
 		const sizer = this.sizerEl ?? this.zoomTargetEl();
 		if (sizer) {
 			sizer.classList.remove("pl-zoom-target");
-			sizer.setCssProps({ transform: "", width: "", minWidth: "", maxWidth: "" });
+			sizer.setCssProps({
+				transform: "",
+				width: "",
+				minWidth: "",
+				maxWidth: "",
+				marginLeft: "",
+			});
 		} else {
 			const cd = this.view.contentDOM;
 			cd.classList?.remove("pl-zoom-target");
@@ -1340,10 +1422,23 @@ export class InkView implements PluginValue {
 		if (!this.zoomSpacer || !this.zoomSpacer.isConnected) {
 			this.zoomSpacer = sd.createDiv({ cls: "pl-zoom-spacer", attr: { "aria-hidden": "true" } });
 		}
-		const w = Math.ceil((target.offsetLeft || 0) + Math.max(target.offsetWidth, (this.geo?.width ?? 0) + 80) * this.zoom);
-		const h = Math.ceil((target.offsetTop || 0) + Math.max(target.offsetHeight, (this.geo?.height ?? 0) + 120) * this.zoom);
-		this.zoomSpacer.style.width = `${w}px`;
-		this.zoomSpacer.style.height = `${h}px`;
+		const sdCs = typeof getComputedStyle === "function" ? getComputedStyle(sd) : null;
+		const padR = parseFloat(sdCs?.paddingRight ?? "") || 0;
+		const rightExtra = this.host.getSettings().pageGuide !== "off" ? 48 : 24;
+		const { width, height } = zoomSpacerSize({
+			offsetLeft: target.offsetLeft || 0,
+			offsetTop: target.offsetTop || 0,
+			targetWidth: target.offsetWidth,
+			targetHeight: target.offsetHeight,
+			geoRight: this.geo ? this.geo.left + this.geo.width : 0,
+			geoBottom: this.geo ? this.geo.top + this.geo.height : 0,
+			paddingRight: padR,
+			rightExtra,
+			bottomExtra: 120,
+			zoom: this.zoom,
+		});
+		this.zoomSpacer.style.width = `${width}px`;
+		this.zoomSpacer.style.height = `${height}px`;
 	}
 
 	private updateZoomBadge(): void {
