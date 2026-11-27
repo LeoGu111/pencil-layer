@@ -8,7 +8,7 @@ import type { BBox } from "./geometry";
 import type { Stroke } from "./model";
 import { freeCanvas, renderInkCanvas } from "./screenshot";
 import { cleanVisionLatexResponse, recognizeMathFromStrokes } from "./mathLatex";
-import type { GeminiModel, MathVisionProvider } from "./settings";
+import { resolveGeminiApiKey, type GeminiModel, type MathVisionProvider } from "./settings";
 
 export interface VisionMathOptions {
 	provider: MathVisionProvider;
@@ -103,24 +103,37 @@ async function callOpenAI(base64Png: string, apiKey: string): Promise<string> {
 }
 
 /**
+ * Resolve the effective provider and API key for formula recognition.
+ * Respects `"offline"` strictly and keeps Gemini/OpenAI keys separated.
+ */
+export function resolveVisionMathTarget(opts: VisionMathOptions): { provider: MathVisionProvider; apiKey: string } {
+	if (opts.provider === "openai") {
+		return { provider: "openai", apiKey: opts.apiKey.trim() };
+	}
+	if (opts.provider === "gemini") {
+		return {
+			provider: "gemini",
+			apiKey: resolveGeminiApiKey({
+				geminiApiKey: opts.geminiApiKey,
+				mathProvider: "gemini",
+				mathApiKey: opts.apiKey,
+			}),
+		};
+	}
+	return { provider: "offline", apiKey: "" };
+}
+
+/**
  * Convert overlay-space strokes (with combined overlay bbox) into raw LaTeX. Uses configured Vision
- * API when enabled & key is present (auto-using the unified Gemini key when set); otherwise runs
- * the built-in offline recognizer immediately.
+ * API (`"gemini"` or `"openai"`) when selected & a matching key is present; otherwise runs the
+ * built-in offline recognizer immediately.
  */
 export async function recognizeMathStrokes(
 	overlayStrokes: readonly Stroke[],
 	box: BBox,
 	opts: VisionMathOptions,
 ): Promise<{ tex: string; usedVision: boolean }> {
-	const geminiKey = (opts.geminiApiKey ?? "").trim();
-	const mathKey = opts.apiKey.trim();
-	const effectiveProvider: MathVisionProvider =
-		opts.provider === "openai"
-			? "openai"
-			: opts.provider === "gemini" || (opts.provider === "offline" && geminiKey.length > 0)
-				? "gemini"
-				: "offline";
-	const key = effectiveProvider === "gemini" ? mathKey || geminiKey : mathKey;
+	const { provider: effectiveProvider, apiKey: key } = resolveVisionMathTarget(opts);
 
 	if (effectiveProvider !== "offline" && key) {
 		try {

@@ -13,6 +13,7 @@ import {
 	sanitizeHoldMs,
 	sanitizeLocal,
 	needsLocalMigration,
+	resolveGeminiApiKey,
 	sanitizeSynced,
 	sanitizeFolder,
 	sanitizeWidth,
@@ -414,5 +415,43 @@ describe("Apple Pencil feel, tilt & gestures settings", () => {
 		expect(sanitizeLocal({ geminiModel: "gemini-4-carbon" }, true).geminiModel).toBe("gemini-4-carbon");
 		expect(sanitizeLocal({ geminiModel: "gemini-3.8-flash" }, true).geminiModel).toBe("gemini-3.8-flash");
 		expect(sanitizeLocal({ geminiModel: "unknown-old-model" }, true).geminiModel).toBe("gemini-4-hydrogen");
+	});
+
+	it("keeps Gemini and OpenAI API keys strictly separated when resolving Gemini assistant key", () => {
+		expect(
+			resolveGeminiApiKey({
+				geminiApiKey: "",
+				mathProvider: "openai",
+				mathApiKey: "sk-openai-secret",
+			}),
+		).toBe("");
+		expect(
+			resolveGeminiApiKey({
+				geminiApiKey: "",
+				mathProvider: "offline",
+				mathApiKey: "sk-openai-secret",
+			}),
+		).toBe("");
+		expect(
+			resolveGeminiApiKey({
+				geminiApiKey: "",
+				mathProvider: "gemini",
+				mathApiKey: "sk-openai-leftover",
+			}),
+		).toBe("");
+		expect(
+			resolveGeminiApiKey({
+				geminiApiKey: "  AIza-gemini  ",
+				mathProvider: "openai",
+				mathApiKey: "sk-openai-secret",
+			}),
+		).toBe("AIza-gemini");
+		expect(
+			resolveGeminiApiKey({
+				geminiApiKey: "",
+				mathProvider: "gemini",
+				mathApiKey: "  AIza-math-gemini  ",
+			}),
+		).toBe("AIza-math-gemini");
 	});
 });
