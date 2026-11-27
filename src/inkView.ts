@@ -19,27 +19,17 @@
  */
 import { EditorView, PluginValue, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import type { Extension, Text } from "@codemirror/state";
-import { Notice, Platform, editorInfoField, setIcon, setTooltip } from "obsidian";
+import { Platform, editorInfoField } from "obsidian";
 import { InkFile, PenStyle, Point, Stroke, Tool, hashLine, isEmptyInk, newId, resolveAnchor } from "./model";
 import { BBox, bbox, dashArray, hitTestStrokeSegment, isCenterline, isDashed, strokeToPath } from "./geometry";
-import { formatLatexFormula } from "./mathLatex";
-import { recognizeMathStrokes, strokesToPngBase64 } from "./mathVision";
-import { buildPageGuideLayout, computeCanvasBottomPadding } from "./pageGuides";
-import { TapLineInfo, insertionPosForY, planTapToType } from "./tapToType";
 import type { AssistantLaunchOptions } from "./aiAssistant";
-import {
-	PinchActivation,
-	ZOOM_MAX,
-	ZOOM_MIN,
-	ZOOM_STEP,
-	clampZoom,
-	distanceBetween,
-	formatZoomPercent,
-	midpoint,
-	pinchScale,
-	scrollForZoomAnchor,
-	wheelZoomFactor,
-} from "./zoom";
+import { computedStyleOf, docOf, isDomElement, isDomNode, svgEl, winOf } from "./dom";
+import { FormulaBarController } from "./formulaBarView";
+import { GeometryGuideController } from "./geometryGuideView";
+import { SelectionMenuController } from "./menuView";
+import { PageGuidesController } from "./pageGuidesView";
+import { TapToTypeController } from "./tapToTypeView";
+import { ZoomController } from "./zoomView";
 import {
 	CurveBuilder,
 	DASH_MIN_DISTANCE,
@@ -54,8 +44,6 @@ import type { InkListener, InkStore } from "./store";
 import {
 	ActiveTool,
 	ERASER_RADII,
-	HIGHLIGHTER_COLORS,
-	PEN_COLORS,
 	PencilSettings,
 	STROKE_ERASER_RADIUS,
 	erasable,
@@ -66,24 +54,15 @@ import { erasePieces } from "./erase";
 import { straightLine } from "./highlight";
 import { TiltSample, isPenEraser, pointerTilt, resampleTilts, tiltWidthMultiplier, toolForPress } from "./penInput";
 import type { PencilGestureAction } from "./pencilGestures";
-import { blockStylusTouch, onTap } from "./tap";
 import { DrawShape, ShapeSpec, XY, adjustShape, draggedShape, recognizeShape, shapeToPoints } from "./shapes";
 import {
 	CompassDrag,
 	GuideEdge,
-	PX_PER_CM,
-	PX_PER_MM,
-	RULER_HALF_LENGTH,
-	RULER_HALF_THICKNESS,
 	compassShape,
 	moveCompass,
 	nearestGuideEdge,
 	projectToInfiniteEdge,
-	rulerGeometry,
-	setSquareEdges,
-	snapGuideAngle,
 	startCompassDrag,
-	twoFingerGuideTransform,
 } from "./geometryGuide";
 import {
 	RecentInk,
@@ -110,7 +89,6 @@ import {
 	transformPoints,
 } from "./lasso";
 import { InkClip, makeClip, pasteOrigin, placeClip } from "./clipboard";
-import { MenuState, menuForSelection, placeMenu } from "./menu";
 import { embedInsertion, rectFromBox, stageRect } from "./crop";
 import { ScreenshotSource, copyPngToClipboard, freeCanvas, rasterizeEditorText, renderInkCanvas } from "./screenshot";
 import type { RenderStroke } from "./inkRender";
@@ -162,7 +140,6 @@ export interface InkHost {
 	openAssistant?(opts: AssistantLaunchOptions): void;
 }
 
-const SVG_NS = "http://www.w3.org/2000/svg";
 /** Extra margin (px) around the CM viewport within which strokes are rendered. */
 const CULL_MARGIN = 400;
 /** How long compat mouse events are swallowed after a pen/mouse ink stroke ends. */
@@ -374,12 +351,6 @@ interface PendingTap {
 	discard: () => void;
 }
 
-function svgEl<K extends keyof SVGElementTagNameMap>(tag: K, cls?: string): SVGElementTagNameMap[K] {
-	const el = activeDocument.createElementNS(SVG_NS, tag);
-	if (cls) el.setAttribute("class", cls);
-	return el;
-}
-
 /** Event timestamp (ms) for the input filter; falls back to now when the platform gives none. */
 function eventTime(e: Event): number {
 	const t = e.timeStamp;
@@ -415,9 +386,7 @@ export class InkView implements PluginValue {
 	private destroyed = false;
 
 	private readonly svg: SVGSVGElement;
-	private readonly gGuides: SVGGElement;
 	private readonly gHl: SVGGElement;
-	private pageGuideKey = "";
 	private readonly gHlLive: SVGGElement;
 	private readonly gPen: SVGGElement;
 	private readonly gPenLive: SVGGElement;
@@ -425,12 +394,15 @@ export class InkView implements PluginValue {
 	private readonly gUi: SVGGElement;
 	private readonly selRect: SVGRectElement;
 	private readonly selHandle: SVGCircleElement;
-	/** Context menu (HTML, inside scrollDOM so it scrolls along with the note). */
-	private menuEl: HTMLElement | null = null;
-	private menu: MenuState | null = null;
-	/** Target + contents the menu was last placed for (it is not re-placed while scrolling). */
-	private menuKey = "";
 	private geo: Geometry | null = null;
+
+	/** Extracted focused controllers. */
+	private readonly pageGuides: PageGuidesController;
+	private readonly geometryGuides: GeometryGuideController;
+	private readonly zoomCtrl: ZoomController;
+	private readonly formulaBar: FormulaBarController;
+	private readonly tapToType: TapToTypeController;
+	private readonly selMenu: SelectionMenuController;
 
 	/** Currently rendered strokes → element, the line top and the transform applied. */
 	private readonly rendered = new Map<Stroke, { el: SVGPathElement; top: number; x: number; tf: string }>();
@@ -449,48 +421,13 @@ export class InkView implements PluginValue {
 	private recentInk: RecentInk[] = [];
 	/** Eraser position while erasing. */
 	private readonly eraserCursor: SVGCircleElement;
-	private readonly gGuideUi: SVGGElement;
-	private readonly guideOutline: SVGPathElement;
-	private readonly guideTicks: SVGPathElement;
-	private readonly guideLabels: SVGGElement;
-	private readonly guideGrip: SVGCircleElement;
-	private readonly guideRotateGrip: SVGCircleElement;
-	private readonly guideResetBtn: SVGGElement;
-	private readonly guideCloseBtn: SVGGElement;
-	private guideOrigin: XY | null = null;
-	private guideDrag:
-		| { mode: "move"; id: number; offset: XY }
-		| { mode: "rotate"; id: number; startAngle: number; startPointerAngle: number }
-		| { mode: "radius"; id: number }
-		| null = null;
-	private readonly guideTouches = new Map<number, XY>();
-	private guidePinchStart: { origin: XY; angle: number; radius: number; a: XY; b: XY; idA: number; idB: number } | null = null;
-	/** Dynamic extra blank pages so empty/short notes can always be scrolled down cleanly. */
-	private extraPages = 2;
-	private lastBottomPad = -1;
-	/** Page pinch-to-zoom state (`1` = 100%). */
-	private zoom = 1;
-	private sizerEl: HTMLElement | null = null;
-	private zoomBaseSizerWidth: number | null = null;
-	private zoomSpacer: HTMLElement | null = null;
-	private zoomBadge: HTMLElement | null = null;
 	private measuredLineTops: ReadonlyMap<number, number> | null = null;
-	private pinch: { activation: PinchActivation; startZoom: number; prevMid: { x: number; y: number }; lastZoom: number } | null = null;
-	/** Floating Formula preview/edit bar (keeps handwritten strokes safe until confirmed). */
-	private mathBarEl: HTMLElement | null = null;
-	private pendingMath: { path: string; strokeIds: string[]; rawTex: string; midY: number; box: BBox } | null = null;
 
 	/** Lasso selection (strokes on the canvas) and the live drag transform. */
 	private selection: Stroke[] | null = null;
 	private dragT: SelectionTransform | null = null;
 	/** Finger down outside the selection: a quick tap deselects (a scroll does not). */
 	private fingerTap: { id: number; x: number; y: number; t: number } | null = null;
-	/** Non-ink tap tracking (finger or passive mouse): tap anywhere to place typing caret + keyboard. */
-	private navTap: { id: number; x: number; y: number; t: number; moved: boolean } | null = null;
-	private lastCompletedTap: { x: number; y: number; at: number } | null = null;
-	/** Buffered handwritten formula stroke IDs waiting for pause auto-conversion in Formula mode. */
-	private mathBuffer: string[] = [];
-	private mathTimer: number | null = null;
 	/** [Stage C] Highlighter strokes snapped to typed text (textHighlightView.ts). */
 	private readonly textHl: TextHighlights;
 	/** [Stage H] Ink anchored to a character of typed text (charAnchorView.ts). */
@@ -506,70 +443,97 @@ export class InkView implements PluginValue {
 		readonly view: EditorView,
 		private readonly host: InkHost,
 	) {
-		this.svg = svgEl("svg", "ink-pages-overlay");
+		const doc = docOf(view);
+		this.svg = svgEl(doc, "svg", "ink-pages-overlay");
 		this.svg.setAttribute("aria-hidden", "true");
-		this.gGuides = svgEl("g", "pl-guides");
-		this.gHl = svgEl("g", "pl-hl");
-		this.gHlLive = svgEl("g", "pl-hl pl-live");
-		this.gPen = svgEl("g", "pl-pen");
-		this.gPenLive = svgEl("g", "pl-pen pl-live");
+		this.gHl = svgEl(doc, "g", "pl-hl");
+		this.gHlLive = svgEl(doc, "g", "pl-hl pl-live");
+		this.gPen = svgEl(doc, "g", "pl-pen");
+		this.gPenLive = svgEl(doc, "g", "pl-pen pl-live");
 		this.textHl = new TextHighlights(view); // [Stage C]
 		this.charA = new CharAnchors(view); // [Stage H]
-		this.gUi = svgEl("g", "pl-ui");
-		this.selRect = svgEl("rect", "pl-sel-box");
-		this.selHandle = svgEl("circle", "pl-sel-handle");
+		this.gUi = svgEl(doc, "g", "pl-ui");
+		this.selRect = svgEl(doc, "rect", "pl-sel-box");
+		this.selHandle = svgEl(doc, "circle", "pl-sel-handle");
 		this.selHandle.setAttribute("r", "7");
 		this.selRect.classList.add("pl-hidden");
 		this.selHandle.classList.add("pl-hidden");
-		this.eraserCursor = svgEl("circle", "pl-eraser-cursor");
+		this.eraserCursor = svgEl(doc, "circle", "pl-eraser-cursor");
 		this.eraserCursor.classList.add("pl-hidden");
-		this.gGuideUi = svgEl("g", "pl-guide-tool pl-hidden");
-		this.guideOutline = svgEl("path", "pl-set-square");
-		this.guideTicks = svgEl("path", "pl-guide-ticks");
-		this.guideLabels = svgEl("g", "pl-guide-labels");
-		this.guideGrip = svgEl("circle", "pl-set-square-grip");
-		this.guideGrip.setAttribute("r", "14");
-		this.guideGrip.setAttribute("aria-label", "Move guide");
-		this.guideRotateGrip = svgEl("circle", "pl-guide-rotate-grip");
-		this.guideRotateGrip.setAttribute("r", "13");
-		this.guideRotateGrip.setAttribute("aria-label", "Rotate or resize guide");
-		this.guideResetBtn = svgEl("g", "pl-guide-action pl-guide-reset");
-		this.guideCloseBtn = svgEl("g", "pl-guide-action pl-guide-close");
-		for (const el of [this.guideOutline, this.guideGrip]) {
-			el.addEventListener("pointerdown", this.onGuideDown);
-			el.addEventListener("pointermove", this.onGuideMove);
-			for (const event of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
-				el.addEventListener(event, this.onGuideEnd);
-			}
-		}
-		this.guideRotateGrip.addEventListener("pointerdown", this.onGuideRotateDown);
-		this.guideRotateGrip.addEventListener("pointermove", this.onGuideMove);
-		for (const event of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
-			this.guideRotateGrip.addEventListener(event, this.onGuideEnd);
-		}
-		this.guideResetBtn.addEventListener("pointerdown", this.onGuideResetDown);
-		this.guideCloseBtn.addEventListener("pointerdown", this.onGuideCloseDown);
-		this.gGuideUi.append(
-			this.guideOutline,
-			this.guideTicks,
-			this.guideLabels,
-			this.guideGrip,
-			this.guideRotateGrip,
-			this.guideResetBtn,
-			this.guideCloseBtn,
-		);
 		this.gUi.append(this.selRect, this.selHandle, this.eraserCursor);
+
+		this.pageGuides = new PageGuidesController(view);
+		this.geometryGuides = new GeometryGuideController(view, {
+			getSettings: () => this.host.getSettings(),
+			updateSettings: (patch) => this.host.updateSettings?.(patch),
+			hasActiveInput: () => !!this.active,
+			toOverlay: (e) => {
+				const [x, y] = this.toOverlay(e, this.svg.getBoundingClientRect());
+				return [x, y];
+			},
+			getGeo: () => this.geo,
+			effectiveScaleY: () => this.effectiveScaleY(),
+		});
+		this.selMenu = new SelectionMenuController(view, {
+			hasClipboard: () => !!this.host.clipboard,
+			isInkVisible: () => this.host.getSettings().inkVisible,
+			colorTool: () => this.colorTool(),
+			canAskAssistant: () => !!this.host.openAssistant,
+			onPaste: (at) => this.paste(at),
+			onCopy: () => {
+				this.copySelection();
+			},
+			onCut: () => this.cutSelection(),
+			onDuplicate: () => this.duplicateSelection(),
+			onDelete: () => this.deleteSelection(),
+			onRecolor: (c) => this.recolorSelection(c),
+			onToLatex: () => void this.convertSelectionToLatex(),
+			onAskGemini: () => this.askGeminiOnSelection(),
+			onScreenshot: () => this.screenshotSelection(),
+			onMenuStateChanged: () => this.renderSelection(),
+		});
+		this.formulaBar = new FormulaBarController(view, {
+			store: this.host.store,
+			getPath: () => this.path,
+			isDestroyed: () => this.destroyed,
+			getSettings: () => this.host.getSettings(),
+			placeStroke: (s) => this.place(s),
+			refreshGeometry: () => {
+				this.applyGeometry(this.readGeometry(this.view));
+				return this.geo;
+			},
+			getSvgRect: () => this.svg.getBoundingClientRect(),
+			effectiveScaleX: () => this.effectiveScaleX(),
+			openAssistant: this.host.openAssistant ? (opts) => this.host.openAssistant!(opts) : undefined,
+		});
+		this.tapToType = new TapToTypeController(view, {
+			isDestroyed: () => this.destroyed,
+			getSettings: () => this.host.getSettings(),
+			hasActiveInput: () => !!this.active,
+			hasSelection: () => !!this.selection,
+			isDeskSelectActive: () => this.host.deskSelect() !== null,
+			isUiTarget: (t) => this.isUiTarget(t),
+			isInteractiveEditorTarget: (t) => this.isInteractiveEditorTarget(t),
+			refreshGeometry: () => {
+				this.applyGeometry(this.readGeometry(this.view));
+				return this.geo;
+			},
+			getSvgRect: () => this.svg.getBoundingClientRect(),
+			clientToOverlay: (cx, cy, r) => this.clientToOverlay(cx, cy, r),
+			effectiveScaleX: () => this.effectiveScaleX(),
+		});
+
 		// Keep ruler/guide BELOW pen ink (`gPen` / `gPenLive`) so lines drawn along the edge stay 100% visible!
-		this.svg.append(this.gGuides, this.gHl, this.gHlLive, this.gGuideUi, this.gPen, this.gPenLive, this.gUi);
-		// Mount the overlay inside `.cm-sizer` when available so text, ink, A4 guides, and rulers share ONE
-		// rigid CSS zoom transform and can never scale differently or drift during pinch-to-zoom.
-		this.sizerEl = this.zoomTargetEl();
-		if (this.sizerEl) {
-			this.sizerEl.classList.add("pl-zoom-host");
-			this.sizerEl.appendChild(this.svg);
-		} else {
-			view.scrollDOM.appendChild(this.svg);
-		}
+		this.svg.append(this.pageGuides.group, this.gHl, this.gHlLive, this.geometryGuides.group, this.gPen, this.gPenLive, this.gUi);
+		this.zoomCtrl = new ZoomController(view, this.svg, {
+			getOverlayGeo: () => this.geo,
+			onZoomApplied: () => {
+				this.applyGeometry(this.readGeometry(this.view));
+				this.renderSelection();
+			},
+			onZoomNeedsRender: () => this.scheduleRender(),
+		});
+		this.zoomCtrl.mountOverlay();
 
 		const sd = view.scrollDOM;
 		const cap = { capture: true };
@@ -585,7 +549,7 @@ export class InkView implements PluginValue {
 		sd.addEventListener("touchend", this.onTouch, capActive);
 		sd.addEventListener("touchcancel", this.onTouch, capActive);
 		sd.addEventListener("wheel", this.onWheel, capActive);
-		sd.addEventListener("click", this.onEditorClick);
+		sd.addEventListener("click", this.tapToType.onEditorClick);
 		for (const t of SUPPRESSED) sd.addEventListener(t, this.onCompatMouse, capActive);
 
 		host.registerInkView(this);
@@ -598,6 +562,7 @@ export class InkView implements PluginValue {
 	// -------------------------------------------------------------------------------------------
 
 	update(u: ViewUpdate): void {
+		this.tapToType.onViewUpdate(u);
 		const cur = this.currentFilePath();
 		if (cur !== this.path && cur && this.path && this.host.isRenaming(cur)) {
 			// Same note mid-rename (the store moves entry + listeners together, so whichever key is
@@ -636,6 +601,7 @@ export class InkView implements PluginValue {
 		// A tap dot waiting for a possible second tap still belongs to this (valid) document.
 		this.flushPendingTap();
 		this.destroyed = true;
+		const win = winOf(this.view);
 		const sd = this.view.scrollDOM;
 		sd.removeEventListener("pointerdown", this.onPointerDown, true);
 		sd.removeEventListener("pointermove", this.onPointerMove, true);
@@ -649,24 +615,21 @@ export class InkView implements PluginValue {
 		sd.removeEventListener("touchend", this.onTouch, true);
 		sd.removeEventListener("touchcancel", this.onTouch, true);
 		sd.removeEventListener("wheel", this.onWheel, true);
-		sd.removeEventListener("click", this.onEditorClick);
+		sd.removeEventListener("click", this.tapToType.onEditorClick);
 		for (const t of SUPPRESSED) sd.removeEventListener(t, this.onCompatMouse, true);
-		this.clearMathBuffer();
-		this.clearMathBar();
-		this.resetZoomDom();
-		if (this.raf) window.cancelAnimationFrame(this.raf);
-		if (this.switchTimer !== null) window.clearTimeout(this.switchTimer);
+		this.formulaBar.destroy();
+		this.geometryGuides.destroy();
+		this.zoomCtrl.destroy();
+		this.pageGuides.destroy();
+		this.tapToType.destroy();
+		this.selMenu.destroy();
+		if (this.raf) win.cancelAnimationFrame(this.raf);
+		if (this.switchTimer !== null) win.clearTimeout(this.switchTimer);
 		this.cancelActive();
 		this.detach();
 		this.svg.remove();
-		this.menuEl?.remove();
-		this.menuEl = null;
-		this.zoomSpacer?.remove();
-		this.zoomSpacer = null;
-		this.zoomBadge?.remove();
-		this.zoomBadge = null;
 		this.view.scrollDOM.classList.remove("pl-mouse-draws", "pl-desk-select");
-		if (this.hoverRaf) window.cancelAnimationFrame(this.hoverRaf);
+		if (this.hoverRaf) win.cancelAnimationFrame(this.hoverRaf);
 		this.setHoverCursor("");
 		this.host.unregisterInkView(this);
 	}
@@ -683,8 +646,8 @@ export class InkView implements PluginValue {
 		// Switching tools (or hiding ink) deselects.
 		const selecting = this.host.selectionToolActive();
 		if (this.selection && (!selecting || !s.inkVisible)) this.clearSelection();
-		if (this.menu && (!selecting || !s.inkVisible)) this.closeMenu();
-		if (!s.mathMode || s.tool !== "pen") this.clearMathBuffer();
+		if (this.selMenu.isOpen && (!selecting || !s.inkVisible)) this.selMenu.close();
+		this.formulaBar.refreshForSettings(s);
 		this.scheduleRender();
 	}
 
@@ -706,7 +669,7 @@ export class InkView implements PluginValue {
 
 	private scheduleFileCheck(): void {
 		if (this.switchTimer !== null || this.destroyed) return;
-		this.switchTimer = window.setTimeout(() => {
+		this.switchTimer = winOf(this.view).setTimeout(() => {
 			this.switchTimer = null;
 			if (this.destroyed) return;
 			const cur = this.currentFilePath();
@@ -723,9 +686,7 @@ export class InkView implements PluginValue {
 
 	private attach(path: string | null): void {
 		this.path = path;
-		this.extraPages = 2;
-		this.lastBottomPad = -1;
-		this.pageGuideKey = "";
+		this.pageGuides.resetForNote();
 		const token = ++this.attachToken;
 		if (!path || path === this.deadPath) {
 			this.path = null;
@@ -747,11 +708,12 @@ export class InkView implements PluginValue {
 	/** `anchorDoc`: the document the current positions refer to (defaults to the current one). */
 	private detach(anchorDoc?: Text): void {
 		this.attachToken++;
+		this.tapToType.onDetach();
 		if (this.active) this.cancelActive();
 		// The document may already be another file's: a pending tap dot can't be anchored safely.
 		this.discardPendingTap();
 		this.clearSelection();
-		this.closeMenu();
+		this.selMenu.close();
 		const unsub = this.unsub;
 		this.unsub = null;
 		if (unsub) {
@@ -938,15 +900,7 @@ export class InkView implements PluginValue {
 					}
 				}
 				const geo = this.readGeometry(view);
-				const { ruler, setSquare, compass } = this.host.getSettings();
-				if (!ruler && !setSquare && !compass) this.guideOrigin = null;
-				else if (!this.guideOrigin) {
-					const scroller = view.scrollDOM;
-					const sy = this.effectiveScaleY();
-					const visTop = Math.max(0, scroller.scrollTop / sy - geo.top);
-					const visH = (scroller.clientHeight || 600) / sy;
-					this.guideOrigin = [Math.max(120, geo.width / 2), visTop + Math.min(180, visH / 3)];
-				}
+				this.geometryGuides.syncOriginForSettings(geo, this.effectiveScaleY());
 				return { geo, lineTops };
 			},
 			write: ({ geo, lineTops }: { geo: Geometry; lineTops: Map<number, number> }) => {
@@ -954,8 +908,8 @@ export class InkView implements PluginValue {
 				try {
 					this.syncCanvasRoom();
 					this.render(geo);
-					this.renderGuide();
-					this.updateZoomSpacer();
+					this.geometryGuides.render(!!this.path);
+					this.zoomCtrl.updateSpacer(this.geo);
 				} finally {
 					this.measuredLineTops = null;
 				}
@@ -965,69 +919,55 @@ export class InkView implements PluginValue {
 
 	/** Add one more blank page height at the bottom of the editor canvas so you can keep scrolling. */
 	addBlankPage(): void {
-		this.extraPages = Math.min(40, this.extraPages + 1);
+		this.pageGuides.addBlankPage();
 		this.syncCanvasRoom();
 		this.scheduleRender();
 	}
 
-	/** Ensure `.cm-content` always has generous bottom padding so blank/short notes scroll cleanly. */
+	/** Ensure `.cm-content` has scrollable bottom room when ink is visible. */
 	private syncCanvasRoom(): void {
-		const cd = this.view.contentDOM;
-		if (!cd || !cd.style) return;
-		const sd = this.view.scrollDOM;
-		const s = this.host.getSettings();
-		let lowestInkY = 0;
 		const ink = this.path ? this.store.get(this.path) : undefined;
-		if (ink && ink.strokes.length > 0) {
-			for (const st of ink.strokes) {
-				if (st.text) continue;
-				const top = this.place(st)[1];
-				const b = shapeOf(st).box;
-				if (top + b.maxY > lowestInkY) lowestInkY = top + b.maxY;
-			}
-		}
-		const docH = (this.view.contentHeight ?? 0) / (this.view.scaleY || 1);
-		const pad = computeCanvasBottomPadding({
-			format: s.pageGuide,
-			docHeight: docH,
-			viewportHeight: sd.clientHeight || 900,
-			lowestInkY,
-			extraPages: this.extraPages,
-		});
-		if (Math.abs(pad - this.lastBottomPad) >= 8) {
-			this.lastBottomPad = pad;
-			cd.style.paddingBottom = `${pad}px`;
-		}
+		this.pageGuides.syncCanvasRoom(
+			ink,
+			this.host.getSettings(),
+			!!this.path,
+			(st) => this.place(st)[1],
+			(st) => shapeOf(st).box,
+		);
 	}
 
 	private effectiveScaleX(): number {
 		const cd = this.view.contentDOM;
-		const fallback = this.zoom !== 1 ? this.zoom : this.view.scaleX || 1;
+		const z = this.zoomCtrl.getZoom();
+		const fallback = z !== 1 ? z : this.view.scaleX || 1;
 		return elementBoxScale(cd, cd.getBoundingClientRect(), fallback, fallback).sx;
 	}
 
 	private effectiveScaleY(): number {
 		const cd = this.view.contentDOM;
-		const fallback = this.zoom !== 1 ? this.zoom : this.view.scaleY || 1;
+		const z = this.zoomCtrl.getZoom();
+		const fallback = z !== 1 ? z : this.view.scaleY || 1;
 		return elementBoxScale(cd, cd.getBoundingClientRect(), fallback, fallback).sy;
 	}
 
 	private readGeometry(view: EditorView): Geometry {
 		const sd = view.scrollDOM;
 		const cd = view.contentDOM;
+		const z = this.zoomCtrl.getZoom();
 		const cRect = cd.getBoundingClientRect();
-		const cs = getComputedStyle(cd);
-		const fallbackX = this.zoom !== 1 ? this.zoom : view.scaleX || 1;
-		const fallbackY = this.zoom !== 1 ? this.zoom : view.scaleY || 1;
+		const cs = computedStyleOf(cd);
+		const fallbackX = z !== 1 ? z : view.scaleX || 1;
+		const fallbackY = z !== 1 ? z : view.scaleY || 1;
 		const { sx, sy } = elementBoxScale(cd, cRect, fallbackX, fallbackY, cs);
 		const padL = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.borderLeftWidth) || 0);
 		const padT = parseInt(cs.paddingTop) || 0;
 		const borderT = parseFloat(cs.borderTopWidth) || 0;
 		const hasLiveHeight = (cd.offsetHeight > 0 || parseFloat(cs.height) > 0) && cRect.height > 0;
-		const docTop = hasLiveHeight || this.zoom !== 1 ? cRect.top + (borderT + padT) * sy : view.documentTop;
-		if (this.sizerEl && this.svg.parentElement === this.sizerEl) {
-			const hRect = this.sizerEl.getBoundingClientRect();
-			const hCs = getComputedStyle(this.sizerEl);
+		const docTop = hasLiveHeight || z !== 1 ? cRect.top + (borderT + padT) * sy : view.documentTop;
+		const sizer = this.zoomCtrl.sizer;
+		if (sizer && this.svg.parentElement === sizer) {
+			const hRect = sizer.getBoundingClientRect();
+			const hCs = computedStyleOf(sizer);
 			const hBorderL = parseFloat(hCs.borderLeftWidth) || 0;
 			const hBorderT = parseFloat(hCs.borderTopWidth) || 0;
 			return {
@@ -1084,7 +1024,7 @@ export class InkView implements PluginValue {
 	private render(geo: Geometry): void {
 		if (this.destroyed) return;
 		this.applyGeometry(geo);
-		this.renderPageGuides(geo);
+		this.pageGuides.render(this.host.getSettings().pageGuide, geo);
 		for (const el of this.pendingLive) el.remove();
 		this.pendingLive = [];
 
@@ -1134,10 +1074,11 @@ export class InkView implements PluginValue {
 		}
 		// Create / position.
 		const selected = this.selection ? new Set(this.selection) : null;
+		const svgDoc = docOf(this.view);
 		for (const [s, [x, top]] of tops) {
 			let r = this.rendered.get(s);
 			if (!r) {
-				const el = svgEl("path");
+				const el = svgEl(svgDoc, "path");
 				if (!s.text) el.setAttribute("d", shapeOf(s).d);
 				paint(el, s);
 				if (this.isErasingPrecisely(s)) el.classList.add("pl-hidden");
@@ -1176,581 +1117,43 @@ export class InkView implements PluginValue {
 
 	/** Events on the context menu, math bar, zoom badge, or ruler/guide controls are left to their own handlers. */
 	private isUiTarget(target: EventTarget | null, pointerType?: string): boolean {
-		if (
-			target === this.guideGrip ||
-			target === this.guideRotateGrip ||
-			target === this.guideResetBtn ||
-			target === this.guideCloseBtn
-		) {
-			return true;
-		}
-		// Let Apple Pencil (`pen`) draw cleanly right along/over the ruler edge instead of accidentally
-		// dragging the ruler body; fingers and mouse still drag/rotate the ruler body directly.
-		if (target === this.guideOutline) {
-			return pointerType !== "pen";
-		}
-		if (typeof Node !== "undefined" && target instanceof Node) {
-			if (this.guideResetBtn.contains?.(target) || this.guideCloseBtn.contains?.(target)) return true;
-			if (this.gGuideUi.contains?.(target)) return pointerType !== "pen";
-			if (this.menuEl && this.menuEl.contains(target)) return true;
-			if (this.mathBarEl && this.mathBarEl.contains(target)) return true;
-			if (this.zoomBadge && this.zoomBadge.contains(target)) return true;
-		}
+		if (this.geometryGuides.isUiTarget(target, pointerType)) return true;
+		if (this.selMenu.isUiTarget(target)) return true;
+		if (this.formulaBar.isUiTarget(target)) return true;
+		if (isDomNode(target, docOf(this.view)) && this.zoomCtrl.isBadgeTarget(target)) return true;
 		return false;
 	}
 
 	// -------------------------------------------------------------------------------------------
-	// Pinch-to-zoom & page zoom controls
+	// Page zoom delegation
 	// -------------------------------------------------------------------------------------------
 
 	getZoom(): number {
-		return this.zoom;
+		return this.zoomCtrl.getZoom();
 	}
 
 	zoomBy(factor: number): void {
-		const sd = this.view.scrollDOM;
-		const r = sd.getBoundingClientRect();
-		const focal = { x: r.left + (sd.clientWidth || 400) / 2, y: r.top + (sd.clientHeight || 400) / 2 };
-		this.setZoom(this.zoom * factor, focal);
+		this.zoomCtrl.zoomBy(factor);
 	}
 
 	zoomIn(): void {
-		this.zoomBy(1 + ZOOM_STEP);
+		this.zoomCtrl.zoomIn();
 	}
 
 	zoomOut(): void {
-		this.zoomBy(1 / (1 + ZOOM_STEP));
+		this.zoomCtrl.zoomOut();
 	}
 
 	resetZoom(): void {
-		this.setZoom(1);
+		this.zoomCtrl.resetZoom();
 	}
 
 	setZoom(nextZoom: number, focalClient?: { x: number; y: number }, prevFocalClient?: { x: number; y: number }): void {
-		const target = clampZoom(nextZoom, ZOOM_MIN, ZOOM_MAX);
-		const prev = this.zoom;
-		const sd = this.view.scrollDOM;
-		const sRect = sd.getBoundingClientRect();
-		const oldScrollLeft = sd.scrollLeft;
-		const oldScrollTop = sd.scrollTop;
-		const sizer = this.sizerEl ?? this.zoomTargetEl();
-		const anchorEl = sizer ?? this.view.contentDOM;
-		const beforeRect = anchorEl.getBoundingClientRect();
-		if (prev === 1 && target !== 1 && anchorEl && anchorEl.offsetWidth > 0) {
-			this.zoomBaseSizerWidth = anchorEl.offsetWidth;
-		} else if (target === 1) {
-			this.zoomBaseSizerWidth = null;
-		}
-		this.zoom = target;
-		this.applyZoomDom();
-		if (focalClient && prev > 0) {
-			const ratio = target / prev;
-			const afterRect = anchorEl.getBoundingClientRect();
-			if ((beforeRect.width ?? 0) > 0 && (afterRect.width ?? 0) > 0) {
-				const pf = prevFocalClient ?? focalClient;
-				const curX = afterRect.left + (pf.x - beforeRect.left) * ratio;
-				const curY = afterRect.top + (pf.y - beforeRect.top) * ratio;
-				const sdScaleX = sd.offsetWidth > 0 && sRect.width > 0 ? sRect.width / sd.offsetWidth : 1;
-				const sdScaleY = sd.offsetHeight > 0 && sRect.height > 0 ? sRect.height / sd.offsetHeight : 1;
-				sd.scrollLeft = Math.max(0, sd.scrollLeft + (curX - focalClient.x) / sdScaleX);
-				sd.scrollTop = Math.max(0, sd.scrollTop + (curY - focalClient.y) / sdScaleY);
-			} else {
-				const fx0 = (prevFocalClient?.x ?? focalClient.x) - sRect.left;
-				const fy0 = (prevFocalClient?.y ?? focalClient.y) - sRect.top;
-				const fx1 = focalClient.x - sRect.left;
-				const fy1 = focalClient.y - sRect.top;
-				sd.scrollLeft = scrollForZoomAnchor(oldScrollLeft, fx0, ratio, fx1);
-				sd.scrollTop = scrollForZoomAnchor(oldScrollTop, fy0, ratio, fy1);
-			}
-		}
-		this.applyGeometry(this.readGeometry(this.view));
-		this.renderSelection();
-		this.updateZoomBadge();
-		if (Math.abs(target - prev) > 1e-4) this.scheduleRender();
-	}
-
-	private zoomTargetEl(): HTMLElement | null {
-		const sd = this.view.scrollDOM;
-		for (let el = this.view.contentDOM?.parentElement ?? null; el && el !== sd; el = el.parentElement) {
-			if (el.classList?.contains("cm-sizer")) return el;
-		}
-		const children = sd.children ? Array.from(sd.children) : [];
-		for (const c of children) {
-			if (c.classList?.contains("cm-sizer")) return c as HTMLElement;
-		}
-		return null;
-	}
-
-	private applyZoomDom(): void {
-		const z = this.zoom;
-		const sizer = this.sizerEl ?? this.zoomTargetEl();
-		const widthLock = z === 1 || !this.zoomBaseSizerWidth ? "" : `${this.zoomBaseSizerWidth}px`;
-		if (sizer) {
-			sizer.classList.add("pl-zoom-host");
-			if (this.svg.parentElement !== sizer) {
-				this.sizerEl = sizer;
-				sizer.appendChild(this.svg);
-			}
-			sizer.classList.toggle("pl-zoom-target", z !== 1);
-			sizer.setCssProps({
-				transform: z === 1 ? "" : `scale(${z})`,
-				width: widthLock,
-				minWidth: widthLock,
-				maxWidth: widthLock,
-			});
-			this.svg.setCssProps({ transform: "" });
-		} else {
-			const cd = this.view.contentDOM;
-			cd.classList?.toggle("pl-zoom-target", z !== 1);
-			cd.setCssProps?.({
-				transform: z === 1 ? "" : `scale(${z})`,
-				width: widthLock,
-				minWidth: widthLock,
-				maxWidth: widthLock,
-			});
-			this.svg.setCssProps({ transform: z === 1 ? "" : `scale(${z})` });
-		}
-		this.updateZoomSpacer();
-	}
-
-	private resetZoomDom(): void {
-		this.zoom = 1;
-		this.zoomBaseSizerWidth = null;
-		const sizer = this.sizerEl ?? this.zoomTargetEl();
-		if (sizer) {
-			sizer.classList.remove("pl-zoom-target");
-			sizer.setCssProps({ transform: "", width: "", minWidth: "", maxWidth: "" });
-		} else {
-			const cd = this.view.contentDOM;
-			cd.classList?.remove("pl-zoom-target");
-			cd.setCssProps?.({ transform: "", width: "", minWidth: "", maxWidth: "" });
-		}
-		this.svg.setCssProps({ transform: "" });
-	}
-
-	private updateZoomSpacer(): void {
-		const sd = this.view.scrollDOM;
-		if (this.zoom === 1) {
-			this.zoomSpacer?.remove();
-			this.zoomSpacer = null;
-			return;
-		}
-		const target = this.sizerEl ?? this.zoomTargetEl() ?? (this.view.contentDOM.offsetWidth > 0 ? this.view.contentDOM : null);
-		if (!target || typeof sd.createDiv !== "function") return;
-		if (!this.zoomSpacer || !this.zoomSpacer.isConnected) {
-			this.zoomSpacer = sd.createDiv({ cls: "pl-zoom-spacer", attr: { "aria-hidden": "true" } });
-		}
-		const w = Math.ceil((target.offsetLeft || 0) + Math.max(target.offsetWidth, (this.geo?.width ?? 0) + 80) * this.zoom);
-		const h = Math.ceil((target.offsetTop || 0) + Math.max(target.offsetHeight, (this.geo?.height ?? 0) + 120) * this.zoom);
-		this.zoomSpacer.style.width = `${w}px`;
-		this.zoomSpacer.style.height = `${h}px`;
-	}
-
-	private updateZoomBadge(): void {
-		if (Math.abs(this.zoom - 1) < 0.005) {
-			this.zoomBadge?.remove();
-			this.zoomBadge = null;
-			return;
-		}
-		const leaf = this.view.scrollDOM.closest?.<HTMLElement>(".workspace-leaf-content") ?? null;
-		if (!leaf || typeof leaf.createDiv !== "function") return;
-		if (!this.zoomBadge || !this.zoomBadge.isConnected) {
-			const b = leaf.createDiv({ cls: "pl-zoom-badge", attr: { role: "button", "aria-label": "Zoom auf 100% zurücksetzen" } });
-			b.addEventListener("pointerdown", (e) => {
-				e.preventDefault();
-				e.stopPropagation();
-			});
-			blockStylusTouch(b);
-			onTap(b, () => this.resetZoom());
-			this.zoomBadge = b;
-		}
-		this.zoomBadge.setText(`${formatZoomPercent(this.zoom)} · ↺`);
+		this.zoomCtrl.setZoom(nextZoom, focalClient, prevFocalClient);
 	}
 
 	private readonly onWheel = (e: WheelEvent): void => {
-		if (!e.ctrlKey && !e.metaKey) return;
-		if (this.isUiTarget(e.target)) return;
-		e.preventDefault();
-		e.stopPropagation();
-		this.setZoom(this.zoom * wheelZoomFactor(e.deltaY), { x: e.clientX, y: e.clientY });
-	};
-
-	// -------------------------------------------------------------------------------------------
-	// Drawing guides (Straight ruler, Set square, Compass) + Page boundaries
-	// -------------------------------------------------------------------------------------------
-
-	private guideHalfSize(): number {
-		return Math.max(90, Math.min(180, (this.geo?.width ?? 480) * 0.36));
-	}
-
-	private guideEdges(): GuideEdge[] {
-		const settings = this.host.getSettings();
-		if (!this.guideOrigin) return [];
-		if (settings.ruler) return rulerGeometry(this.guideOrigin, settings.rulerAngle, RULER_HALF_LENGTH, RULER_HALF_THICKNESS).edges;
-		if (settings.setSquare) return setSquareEdges(this.guideOrigin, settings.setSquareAngle, this.guideHalfSize());
-		return [];
-	}
-
-	private renderPageGuides(geo: Geometry): void {
-		const fmt = this.host.getSettings().pageGuide;
-		const sd = this.view.scrollDOM;
-		const visW = Math.round(sd.clientWidth || geo.width);
-		const leftMargin = Math.max(0, Math.round(geo.left));
-		const key = `${fmt}:${Math.round(geo.width)}x${Math.round(geo.height)}:${visW}:${leftMargin}`;
-		if (key === this.pageGuideKey) return;
-		this.pageGuideKey = key;
-		this.gGuides.replaceChildren();
-		const layout = buildPageGuideLayout(fmt, geo.width, geo.height, Math.max(200, visW - leftMargin));
-		if (!layout) return;
-		const totalH = layout.totalHeight;
-		const sheetW = layout.sheetWidth;
-		const paperLeft = layout.paperLeftX;
-		const paperRight = layout.paperRightX;
-
-		// Subtle shading OUTSIDE the physical paper (beyond the 1 cm print margins).
-		const leftOuterW = leftMargin + paperLeft;
-		if (leftOuterW > 4) {
-			const leftShade = svgEl("rect", "pl-guide-overflow");
-			leftShade.setAttribute("x", String(-leftMargin));
-			leftShade.setAttribute("y", "0");
-			leftShade.setAttribute("width", String(leftOuterW));
-			leftShade.setAttribute("height", String(totalH));
-			this.gGuides.appendChild(leftShade);
-		}
-		const rightShadeW = Math.max(geo.width - paperRight, visW - leftMargin - paperRight);
-		if (rightShadeW > 2) {
-			const shade = svgEl("rect", "pl-guide-overflow");
-			shade.setAttribute("x", String(paperRight));
-			shade.setAttribute("y", "0");
-			shade.setAttribute("width", String(rightShadeW));
-			shade.setAttribute("height", String(totalH));
-			this.gGuides.appendChild(shade);
-		}
-
-		// Full physical paper frame (e.g. 21.0 cm wide for A4) + subtle inner 1 cm print margin ("Druckrand").
-		const addLine = (cls: string, x1: number, y1: number, x2: number, y2: number) => {
-			const l = svgEl("line", cls);
-			l.setAttribute("x1", String(x1));
-			l.setAttribute("y1", String(y1));
-			l.setAttribute("x2", String(x2));
-			l.setAttribute("y2", String(y2));
-			this.gGuides.appendChild(l);
-		};
-		// Outer paper borders (exact DIN A4 = 21 cm, A3 = 29.7 cm, etc.)
-		addLine("pl-guide-line pl-guide-paper", paperLeft, 0, paperLeft, totalH);
-		addLine("pl-guide-line pl-guide-paper", paperRight, 0, paperRight, totalH);
-		addLine("pl-guide-line pl-guide-paper", paperLeft, 0, paperRight, 0);
-		// Subtle inner print margin lines (Druckrand: 1 cm inside left & right edges)
-		addLine("pl-guide-line pl-guide-print-margin", 0, 0, 0, totalH);
-		addLine("pl-guide-line pl-guide-print-margin", sheetW, 0, sheetW, totalH);
-
-		// Page 1 header badge showing true paper width + print margin.
-		const paperWCm = Math.round((layout.paperWidth / PX_PER_CM) * 10) / 10;
-		const marginCm = Math.round((layout.marginPx / PX_PER_CM) * 10) / 10;
-		const topLabel = svgEl("text", "pl-guide-label");
-		topLabel.setAttribute("x", "8");
-		topLabel.setAttribute("y", "14");
-		topLabel.textContent = `${layout.metrics.label} (${paperWCm} cm · Druckrand ${marginCm} cm) · Seite 1`;
-		this.gGuides.appendChild(topLabel);
-
-		layout.horizontalBreaks.forEach((y, idx) => {
-			addLine("pl-guide-line pl-guide-break", paperLeft, y, paperRight, y);
-
-			const label = svgEl("text", "pl-guide-label");
-			label.setAttribute("x", String(layout.labelRightX));
-			label.setAttribute("y", String(Math.max(14, y - 6)));
-			label.setAttribute("text-anchor", "end");
-			label.textContent = `${layout.metrics.label} · Ende Seite ${idx + 1}`;
-			this.gGuides.appendChild(label);
-
-			const nextLabel = svgEl("text", "pl-guide-label");
-			nextLabel.setAttribute("x", "8");
-			nextLabel.setAttribute("y", String(y + 15));
-			nextLabel.textContent = `${layout.metrics.label} · Seite ${idx + 2}`;
-			this.gGuides.appendChild(nextLabel);
-		});
-	}
-
-	private renderGuide(): void {
-		const origin = this.guideOrigin;
-		const settings = this.host.getSettings();
-		const activeKind = settings.compass ? "compass" : settings.ruler ? "ruler" : settings.setSquare ? "setSquare" : "none";
-		const shown = !!this.path && !!origin && activeKind !== "none";
-		this.gGuideUi.classList.toggle("pl-hidden", !shown);
-		if (!shown || !origin) return;
-
-		this.guideLabels.replaceChildren();
-		this.guideResetBtn.replaceChildren();
-		this.guideCloseBtn.replaceChildren();
-
-		const addActionBtn = (parent: SVGGElement, cx: number, cy: number, text: string, label: string) => {
-			parent.setAttribute("aria-label", label);
-			const bg = svgEl("circle", "pl-guide-action-bg");
-			bg.setAttribute("cx", String(cx));
-			bg.setAttribute("cy", String(cy));
-			bg.setAttribute("r", "13");
-			const t = svgEl("text", "pl-guide-action-text");
-			t.setAttribute("x", String(cx));
-			t.setAttribute("y", String(cy + 4));
-			t.setAttribute("text-anchor", "middle");
-			t.textContent = text;
-			parent.append(bg, t);
-		};
-
-		if (activeKind === "compass") {
-			const [x, y] = origin;
-			const r = settings.compassRadius;
-			this.guideOutline.setAttribute("d", `M ${x - r} ${y} a ${r} ${r} 0 0 1 ${2 * r} 0 a ${r} ${r} 0 0 1 ${-2 * r} 0 Z M ${x} ${y} h ${r}`);
-			let ticks = "";
-			for (let i = 0; i < 24; i++) {
-				const a = (i * Math.PI) / 12;
-				const len = i % 6 === 0 ? 10 : 5;
-				ticks += ` M ${(x + Math.cos(a) * (r - len)).toFixed(1)} ${(y + Math.sin(a) * (r - len)).toFixed(1)} L ${(x + Math.cos(a) * r).toFixed(1)} ${(y + Math.sin(a) * r).toFixed(1)}`;
-			}
-			this.guideTicks.setAttribute("d", ticks);
-			this.guideGrip.setAttribute("cx", String(x));
-			this.guideGrip.setAttribute("cy", String(y));
-			this.guideRotateGrip.setAttribute("cx", String(x + r));
-			this.guideRotateGrip.setAttribute("cy", String(y));
-			const cm = (r / PX_PER_CM).toFixed(1);
-			const badge = svgEl("text", "pl-guide-readout");
-			badge.setAttribute("x", String(x));
-			badge.setAttribute("y", String(y - 18));
-			badge.setAttribute("text-anchor", "middle");
-			badge.textContent = `r = ${cm} cm`;
-			this.guideLabels.appendChild(badge);
-			addActionBtn(this.guideResetBtn, x - 26, y - r - 18, "R", "Standard-Radius");
-			addActionBtn(this.guideCloseBtn, x + 26, y - r - 18, "×", "Zirkel schließen");
-			return;
-		}
-
-		if (activeKind === "ruler") {
-			const geom = rulerGeometry(origin, settings.rulerAngle, RULER_HALF_LENGTH, RULER_HALF_THICKNESS);
-			const [tl, tr, br, bl] = geom.corners;
-			const rad = (settings.rulerAngle * Math.PI) / 180;
-			const cos = Math.cos(rad);
-			const sin = Math.sin(rad);
-			const pt = (lx: number, ly: number): XY => [origin[0] + lx * cos - ly * sin, origin[1] + lx * sin + ly * cos];
-
-			this.guideOutline.setAttribute(
-				"d",
-				`M ${tl[0].toFixed(1)} ${tl[1].toFixed(1)} L ${tr[0].toFixed(1)} ${tr[1].toFixed(1)} L ${br[0].toFixed(1)} ${br[1].toFixed(1)} L ${bl[0].toFixed(1)} ${bl[1].toFixed(1)} Z`,
-			);
-
-			const totalPx = RULER_HALF_LENGTH * 2 - 28;
-			const totalMm = Math.floor(totalPx / PX_PER_MM);
-			let ticks = "";
-			for (let mm = 0; mm <= totalMm; mm++) {
-				const lx = -RULER_HALF_LENGTH + 14 + mm * PX_PER_MM;
-				const len = mm % 10 === 0 ? 13 : mm % 5 === 0 ? 9 : 5;
-				const p0 = pt(lx, -RULER_HALF_THICKNESS);
-				const p1 = pt(lx, -RULER_HALF_THICKNESS + len);
-				const q0 = pt(lx, RULER_HALF_THICKNESS);
-				const q1 = pt(lx, RULER_HALF_THICKNESS - (mm % 10 === 0 ? 8 : 4));
-				ticks += ` M ${p0[0].toFixed(1)} ${p0[1].toFixed(1)} L ${p1[0].toFixed(1)} ${p1[1].toFixed(1)}`;
-				if (mm % 5 === 0) ticks += ` M ${q0[0].toFixed(1)} ${q0[1].toFixed(1)} L ${q1[0].toFixed(1)} ${q1[1].toFixed(1)}`;
-				if (mm % 10 === 0) {
-					const lp = pt(lx, -RULER_HALF_THICKNESS + 23);
-					const num = svgEl("text", "pl-guide-cm");
-					num.setAttribute("x", lp[0].toFixed(1));
-					num.setAttribute("y", lp[1].toFixed(1));
-					num.setAttribute("text-anchor", "middle");
-					num.setAttribute("transform", `rotate(${settings.rulerAngle} ${lp[0].toFixed(1)} ${lp[1].toFixed(1)})`);
-					num.textContent = String(mm / 10);
-					this.guideLabels.appendChild(num);
-				}
-			}
-			this.guideTicks.setAttribute("d", ticks);
-
-			const anglePos = pt(0, 6);
-			const angleText = svgEl("text", "pl-guide-readout");
-			angleText.setAttribute("x", anglePos[0].toFixed(1));
-			angleText.setAttribute("y", anglePos[1].toFixed(1));
-			angleText.setAttribute("text-anchor", "middle");
-			angleText.setAttribute("transform", `rotate(${settings.rulerAngle} ${anglePos[0].toFixed(1)} ${anglePos[1].toFixed(1)})`);
-			angleText.textContent = `${Math.round(settings.rulerAngle)}°`;
-			this.guideLabels.appendChild(angleText);
-
-			const movePos = pt(-RULER_HALF_LENGTH + 26, 0);
-			this.guideGrip.setAttribute("cx", movePos[0].toFixed(1));
-			this.guideGrip.setAttribute("cy", movePos[1].toFixed(1));
-			this.guideRotateGrip.setAttribute("cx", geom.rotateHandle[0].toFixed(1));
-			this.guideRotateGrip.setAttribute("cy", geom.rotateHandle[1].toFixed(1));
-
-			const resetPos = pt(-52, RULER_HALF_THICKNESS + 18);
-			const closePos = pt(52, RULER_HALF_THICKNESS + 18);
-			addActionBtn(this.guideResetBtn, resetPos[0], resetPos[1], "0°", "Winkel auf 0° setzen");
-			addActionBtn(this.guideCloseBtn, closePos[0], closePos[1], "×", "Lineal schließen");
-			return;
-		}
-
-		// Set square (Geodreieck)
-		const half = this.guideHalfSize();
-		const edges = setSquareEdges(origin, settings.setSquareAngle, half);
-		const [a, b, c] = edges.map(([from]) => from);
-		const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
-		const dx = (b[0] - a[0]) / length;
-		const dy = (b[1] - a[1]) / length;
-		this.guideOutline.setAttribute("d", `M ${a.join(" ")} L ${b.join(" ")} L ${c.join(" ")} Z`);
-
-		let ticks = "";
-		const totalMm = Math.floor(length / PX_PER_MM);
-		for (let mm = 1; mm < totalMm; mm++) {
-			const distance = mm * PX_PER_MM;
-			const x = a[0] + dx * distance;
-			const y = a[1] + dy * distance;
-			const size = mm % 10 === 0 ? 12 : mm % 5 === 0 ? 8 : 4;
-			ticks += ` M ${x.toFixed(1)} ${y.toFixed(1)} l ${(-dy * size).toFixed(1)} ${(dx * size).toFixed(1)}`;
-			if (mm % 10 === 0 && mm < totalMm - 3) {
-				const lx = x - dy * 21;
-				const ly = y + dx * 21;
-				const num = svgEl("text", "pl-guide-cm");
-				num.setAttribute("x", lx.toFixed(1));
-				num.setAttribute("y", ly.toFixed(1));
-				num.setAttribute("text-anchor", "middle");
-				num.setAttribute("transform", `rotate(${settings.setSquareAngle} ${lx.toFixed(1)} ${ly.toFixed(1)})`);
-				num.textContent = String(mm / 10);
-				this.guideLabels.appendChild(num);
-			}
-		}
-		this.guideTicks.setAttribute("d", ticks);
-		const cx = (a[0] + b[0] + c[0]) / 3;
-		const cy = (a[1] + b[1] + c[1]) / 3;
-		this.guideGrip.setAttribute("cx", String(cx));
-		this.guideGrip.setAttribute("cy", String(cy));
-		this.guideRotateGrip.setAttribute("cx", String(b[0] - dx * 22 - dy * 12));
-		this.guideRotateGrip.setAttribute("cy", String(b[1] - dy * 22 + dx * 12));
-
-		const badge = svgEl("text", "pl-guide-readout");
-		badge.setAttribute("x", String(cx));
-		badge.setAttribute("y", String(cy - 20));
-		badge.setAttribute("text-anchor", "middle");
-		badge.textContent = `${Math.round(settings.setSquareAngle)}°`;
-		this.guideLabels.appendChild(badge);
-		addActionBtn(this.guideResetBtn, c[0] - 24, c[1] + 18, "0°", "Geodreieck auf 0° setzen");
-		addActionBtn(this.guideCloseBtn, c[0] + 24, c[1] + 18, "×", "Geodreieck schließen");
-	}
-
-	private readonly onGuideDown = (event: PointerEvent): void => {
-		if (!this.guideOrigin || this.active || (event.pointerType === "mouse" && event.button !== 0)) return;
-		// When drawing with Apple Pencil along the ruler body, let the ink stroke capture the edge
-		// instead of accidentally dragging the ruler (pen can still grab the explicit center grip).
-		if (event.pointerType === "pen" && event.currentTarget === this.guideOutline) return;
-		event.preventDefault();
-		event.stopPropagation();
-		const [x, y] = this.toOverlay(event, this.svg.getBoundingClientRect());
-		const target = event.currentTarget as Element;
-		try {
-			target.setPointerCapture(event.pointerId);
-		} catch {
-			/* ignore */
-		}
-		this.guideTouches.set(event.pointerId, [x, y]);
-		if (this.guideTouches.size === 2) {
-			const entries = [...this.guideTouches.entries()];
-			const s = this.host.getSettings();
-			const angle = s.ruler ? s.rulerAngle : s.setSquareAngle;
-			this.guidePinchStart = {
-				origin: [...this.guideOrigin] as XY,
-				angle,
-				radius: s.compassRadius,
-				idA: entries[0][0],
-				a: entries[0][1],
-				idB: entries[1][0],
-				b: entries[1][1],
-			};
-			this.guideDrag = null;
-			return;
-		}
-		this.guideDrag = { mode: "move", id: event.pointerId, offset: [this.guideOrigin[0] - x, this.guideOrigin[1] - y] };
-	};
-
-	private readonly onGuideRotateDown = (event: PointerEvent): void => {
-		if (!this.guideOrigin || this.active || (event.pointerType === "mouse" && event.button !== 0)) return;
-		event.preventDefault();
-		event.stopPropagation();
-		const [x, y] = this.toOverlay(event, this.svg.getBoundingClientRect());
-		try {
-			this.guideRotateGrip.setPointerCapture(event.pointerId);
-		} catch {
-			/* ignore */
-		}
-		const s = this.host.getSettings();
-		if (s.compass) {
-			this.guideDrag = { mode: "radius", id: event.pointerId };
-			return;
-		}
-		const startPointerAngle = (Math.atan2(y - this.guideOrigin[1], x - this.guideOrigin[0]) * 180) / Math.PI;
-		const startAngle = s.ruler ? s.rulerAngle : s.setSquareAngle;
-		this.guideDrag = { mode: "rotate", id: event.pointerId, startAngle, startPointerAngle };
-	};
-
-	private readonly onGuideMove = (event: PointerEvent): void => {
-		if (!this.guideOrigin) return;
-		const [x, y] = this.toOverlay(event, this.svg.getBoundingClientRect());
-		if (this.guideTouches.has(event.pointerId)) {
-			this.guideTouches.set(event.pointerId, [x, y]);
-		}
-		if (this.guidePinchStart && this.guideTouches.size >= 2) {
-			const p = this.guidePinchStart;
-			const curA = this.guideTouches.get(p.idA);
-			const curB = this.guideTouches.get(p.idB);
-			if (curA && curB) {
-				event.preventDefault();
-				event.stopPropagation();
-				const tf = twoFingerGuideTransform(p.origin, p.angle, p.a, p.b, curA, curB, 3);
-				this.guideOrigin = tf.origin;
-				const s = this.host.getSettings();
-				if (s.ruler) this.host.updateSettings?.({ rulerAngle: tf.angle });
-				else if (s.setSquare) this.host.updateSettings?.({ setSquareAngle: tf.angle });
-				else if (s.compass) {
-					const nextR = Math.max(40, Math.min(200, Math.round(p.radius * tf.scaleRatio)));
-					this.host.updateSettings?.({ compassRadius: nextR });
-				}
-				this.renderGuide();
-			}
-			return;
-		}
-		const drag = this.guideDrag;
-		if (!drag || event.pointerId !== drag.id) return;
-		event.preventDefault();
-		event.stopPropagation();
-		const s = this.host.getSettings();
-		if (drag.mode === "move") {
-			this.guideOrigin = [x + drag.offset[0], y + drag.offset[1]];
-			this.renderGuide();
-		} else if (drag.mode === "rotate") {
-			const curAng = (Math.atan2(y - this.guideOrigin[1], x - this.guideOrigin[0]) * 180) / Math.PI;
-			const nextAng = snapGuideAngle(drag.startAngle + (curAng - drag.startPointerAngle), 3);
-			if (s.ruler) this.host.updateSettings?.({ rulerAngle: nextAng });
-			else if (s.setSquare) this.host.updateSettings?.({ setSquareAngle: nextAng });
-			this.renderGuide();
-		} else if (drag.mode === "radius") {
-			const nextR = Math.max(40, Math.min(200, Math.round(Math.hypot(x - this.guideOrigin[0], y - this.guideOrigin[1]))));
-			this.host.updateSettings?.({ compassRadius: nextR });
-			this.renderGuide();
-		}
-	};
-
-	private readonly onGuideEnd = (event: PointerEvent): void => {
-		this.guideTouches.delete(event.pointerId);
-		if (this.guideTouches.size < 2) this.guidePinchStart = null;
-		if (this.guideDrag?.id === event.pointerId) this.guideDrag = null;
-	};
-
-	private readonly onGuideResetDown = (event: PointerEvent): void => {
-		event.preventDefault();
-		event.stopPropagation();
-		const s = this.host.getSettings();
-		if (s.ruler) this.host.updateSettings?.({ rulerAngle: s.rulerAngle === 0 ? 90 : 0 });
-		else if (s.setSquare) this.host.updateSettings?.({ setSquareAngle: 0 });
-		else if (s.compass) this.host.updateSettings?.({ compassRadius: 100 });
-	};
-
-	private readonly onGuideCloseDown = (event: PointerEvent): void => {
-		event.preventDefault();
-		event.stopPropagation();
-		this.host.updateSettings?.({ ruler: false, setSquare: false, compass: false });
+		this.zoomCtrl.handleWheel(e, (t) => this.isUiTarget(t));
 	};
 
 	/** Client coordinates → overlay coordinates. */
@@ -1780,7 +1183,7 @@ export class InkView implements PluginValue {
 		}
 		if (this.isUiTarget(e.target, stylus ? "pen" : "touch")) return;
 		if (stylus) {
-			this.pinch = null;
+			this.zoomCtrl.resetPinch();
 			// Blocks scrolling, selection/caret moves, compat mouse events and iPadOS Scribble.
 			if (e.cancelable) e.preventDefault();
 			e.stopPropagation();
@@ -1793,33 +1196,10 @@ export class InkView implements PluginValue {
 			return;
 		}
 		// Two-finger pinch-to-zoom + focal-point pan directly on the note page.
-		if (!this.active && !this.guideDrag && !this.guidePinchStart) {
-			if (direct.length === 2) {
-				this.navTap = null;
-				if (e.cancelable) e.preventDefault();
-				const dist = distanceBetween(direct[0], direct[1]);
-				const mid = midpoint(direct[0], direct[1]);
-				if (e.type === "touchstart" || !this.pinch) {
-					this.pinch = {
-						activation: new PinchActivation(dist, 0.03),
-						startZoom: this.zoom,
-						prevMid: mid,
-						lastZoom: this.zoom,
-					};
-				} else if (e.type === "touchmove") {
-					if (e.cancelable) e.preventDefault();
-					const ratio = this.pinch.activation.ratio(dist);
-					const nextZoom = this.pinch.activation.active
-						? pinchScale(this.pinch.startZoom, 1, ratio, ZOOM_MIN, ZOOM_MAX)
-						: this.pinch.startZoom;
-					this.setZoom(nextZoom, mid, this.pinch.prevMid);
-					this.pinch.prevMid = mid;
-					this.pinch.lastZoom = nextZoom;
-				}
+		if (!this.active && !this.geometryGuides.isManipulating()) {
+			if (this.zoomCtrl.handleTouchPinch(e, direct)) {
+				this.tapToType.clearNavTap();
 				return;
-			}
-			if (this.pinch && (e.type === "touchend" || e.type === "touchcancel" || direct.length < 2)) {
-				this.pinch = null;
 			}
 		}
 		if (e.type === "touchstart" && this.selection && e.cancelable && e.touches.length === 1) {
@@ -1860,6 +1240,7 @@ export class InkView implements PluginValue {
 		if (this.isUiTarget(e.target, e.pointerType)) return;
 		if (e.pointerType === "touch") this.setPenNear(false);
 		if (this.isDeskSelectPointer(e)) {
+			this.tapToType.cleanupUnusedPadding();
 			this.onDeskSelectDown(e); // [Stage F]
 			return;
 		}
@@ -1871,11 +1252,10 @@ export class InkView implements PluginValue {
 		e.preventDefault();
 		e.stopPropagation();
 		if (this.active || !this.path || !this.store.isLoaded(this.path)) return;
+		// Clean up any unused tap-to-type padding before starting a stroke.
+		this.tapToType.cleanupUnusedPadding();
 		// Never auto-convert a formula mid-stroke while the user puts the pen down to keep writing.
-		if (this.mathTimer !== null) {
-			window.clearTimeout(this.mathTimer);
-			this.mathTimer = null;
-		}
+		this.formulaBar.cancelTimer();
 
 		const settings = this.host.getSettings();
 		if (!settings.inkVisible) this.host.showInk();
@@ -1885,6 +1265,8 @@ export class InkView implements PluginValue {
 		const [x, y, p] = this.toOverlay(e, this.svg.getBoundingClientRect());
 		const now = performance.now();
 		const pen = e.pointerType === "pen";
+		const svgDoc = docOf(this.view);
+		const win = winOf(this.view);
 
 		// Pen eraser end (Surface Pen etc.: button 5 / buttons & 32) erases regardless of the selected
 		// tool, and never counts as a double-tap tap.
@@ -1901,7 +1283,7 @@ export class InkView implements PluginValue {
 		const track: TapTrack = { pointerId: e.pointerId, pen: pen && !eraserEnd, downAt: now, downX: x, downY: y, maxMove: 0, pairWith };
 		if (tool === "lasso") {
 			const hadSelection = !!this.selection;
-			const menuWasOpen = !!this.menu;
+			const menuWasOpen = this.selMenu.isOpen;
 			if (this.selection) {
 				const hit = this.hitSel(x, y);
 				if (hit) {
@@ -1911,8 +1293,8 @@ export class InkView implements PluginValue {
 				}
 				this.clearSelection();
 			}
-			this.closeMenu();
-			const el = svgEl("path", "pl-lasso-path");
+			this.selMenu.close();
+			const el = svgEl(svgDoc, "path", "pl-lasso-path");
 			this.gUi.appendChild(el);
 			const lasso: LassoInput = {
 				kind: "lasso",
@@ -1928,7 +1310,7 @@ export class InkView implements PluginValue {
 			};
 			// Long-press (pen still) on empty space offers Paste.
 			if (this.host.clipboard && !hadSelection) {
-				lasso.pressTimer = window.setTimeout(() => this.onLongPress(lasso), LONG_PRESS_MS);
+				lasso.pressTimer = win.setTimeout(() => this.onLongPress(lasso), LONG_PRESS_MS);
 			}
 			this.active = lasso;
 			return;
@@ -1954,14 +1336,15 @@ export class InkView implements PluginValue {
 		}
 		const params = strokeParams(settings, tool);
 		const edge = tool === "pen" && (settings.penShape === "freehand" || settings.penShape === "line")
-			? nearestGuideEdge([x, y], this.guideEdges(), 24) : null;
-		const compass = tool === "pen" && settings.penShape === "freehand" && settings.compass && this.guideOrigin
-			? startCompassDrag([x, y], this.guideOrigin, settings.compassRadius, 22) : null;
+			? nearestGuideEdge([x, y], this.geometryGuides.guideEdges(), 24) : null;
+		const guideOrigin = this.geometryGuides.getOrigin();
+		const compass = tool === "pen" && settings.penShape === "freehand" && settings.compass && guideOrigin
+			? startCompassDrag([x, y], guideOrigin, settings.compassRadius, 22) : null;
 		const shape = edge ? "line" : tool === "pen" ? settings.penShape : "freehand";
 		const geometry: DrawGeometry | null = compass ? { kind: "compass", drag: compass } : shape === "freehand" ? null : {
 			kind: "shape", shape, start: edge ? projectToInfiniteEdge([x, y], edge) : [x, y], edge, end: null,
 		};
-		const el = svgEl("path");
+		const el = svgEl(svgDoc, "path");
 		const tilt = settings.tiltShading ? pointerTilt(e) : 0;
 		// Geometry/ruler strokes render snapped shapes without tilt outlines; never strip their live stroke!
 		const hasTilt = !geometry && tiltWidthMultiplier(tilt, params.style, params.tool) > 1.01;
@@ -2005,14 +1388,11 @@ export class InkView implements PluginValue {
 	private onOtherPointerDown(e: PointerEvent): void {
 		if (this.active) return;
 		if (e.pointerType === "mouse" && e.button !== 0) return;
-		const canTapType =
-			(e.pointerType === "touch" || (e.pointerType === "mouse" && e.button === 0)) &&
-			!this.isInteractiveEditorTarget(e.target);
 		if (!this.selection) {
-			this.navTap = canTapType ? { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), moved: false } : null;
+			this.tapToType.trackPointerDown(e);
 			return;
 		}
-		this.navTap = null;
+		this.tapToType.clearNavTap();
 		this.applyGeometry(this.readGeometry(this.view));
 		const [x, y] = this.toOverlay(e, this.svg.getBoundingClientRect());
 		const hit = this.hitSel(x, y);
@@ -2032,7 +1412,7 @@ export class InkView implements PluginValue {
 
 	/** Do not intercept clicks on links, checkboxes, fold icons, widgets, or embeds. */
 	private isInteractiveEditorTarget(target: EventTarget | null): boolean {
-		if (!(target instanceof Element)) return false;
+		if (!isDomElement(target, docOf(this.view))) return false;
 		return !!target.closest(
 			"a, button, input, textarea, select, label, .clickable-icon, .internal-link, .external-link, .task-list-item-checkbox, .cm-foldGutter, .callout-fold, .pl-menu, .ink-pages-toolbar",
 		);
@@ -2047,9 +1427,7 @@ export class InkView implements PluginValue {
 	}
 
 	private readonly onPointerMove = (e: PointerEvent): void => {
-		if (this.navTap && e.pointerId === this.navTap.id && Math.hypot(e.clientX - this.navTap.x, e.clientY - this.navTap.y) >= 10) {
-			this.navTap.moved = true;
-		}
+		this.tapToType.trackPointerMove(e);
 		const a = this.active;
 		if (!a && e.pointerType === "mouse") this.onDeskHover(e); // [Stage F] cursor feedback
 		if (!a && e.pointerType === "pen") this.setPenNear(true);
@@ -2151,24 +1529,7 @@ export class InkView implements PluginValue {
 
 	private readonly onPointerEnd = (e: PointerEvent): void => {
 		const completed = e.type === "pointerup";
-		const nt = this.navTap;
-		if (nt && e.pointerId === nt.id) {
-			this.navTap = null;
-			if (
-				completed &&
-				!nt.moved &&
-				performance.now() - nt.t < 450 &&
-				Math.hypot(e.clientX - nt.x, e.clientY - nt.y) < 10 &&
-				e.isPrimary
-			) {
-				if (e.pointerType === "touch" && !this.view.contentDOM.contains(e.target as Node)) {
-					this.lastCompletedTap = null;
-					this.applyTapToType(e.clientX, e.clientY, e.target);
-				} else {
-					this.lastCompletedTap = { x: e.clientX, y: e.clientY, at: performance.now() };
-				}
-			}
-		}
+		this.tapToType.trackPointerEnd(e, completed);
 		const ft = this.fingerTap;
 		if (ft && e.pointerId === ft.id) {
 			this.fingerTap = null;
@@ -2196,8 +1557,9 @@ export class InkView implements PluginValue {
 		} catch {
 			/* ignore */
 		}
+		const win = winOf(this.view);
 		if (this.raf) {
-			window.cancelAnimationFrame(this.raf);
+			win.cancelAnimationFrame(this.raf);
 			this.raf = 0;
 		}
 		if (!completed) return;
@@ -2244,7 +1606,7 @@ export class InkView implements PluginValue {
 		if (doubleTapOn && pending && a.pairWith === pending && isDoubleTap(pending.tap, tap, this.recentInk)) {
 			// Double tap: neither tap leaves anything behind (no dots, no undo entries).
 			this.pendingTap = null;
-			window.clearTimeout(pending.timer);
+			win.clearTimeout(pending.timer);
 			pending.discard();
 			this.discardInput(a);
 			if (settings.doubleTapAction === "eraser" || !this.host.runPencilGestureAction) this.host.toggleEraser();
@@ -2262,7 +1624,7 @@ export class InkView implements PluginValue {
 			}
 			this.pendingTap = {
 				tap,
-				timer: window.setTimeout(() => this.flushPendingTap(), TAP.maxGapMs + 30),
+				timer: win.setTimeout(() => this.flushPendingTap(), TAP.maxGapMs + 30),
 				commit: () => this.completeInput(a),
 				discard: () => this.discardInput(a),
 			};
@@ -2298,7 +1660,7 @@ export class InkView implements PluginValue {
 		const p = this.pendingTap;
 		if (!p) return;
 		this.pendingTap = null;
-		window.clearTimeout(p.timer);
+		winOf(this.view).clearTimeout(p.timer);
 		p.commit();
 	}
 
@@ -2306,7 +1668,7 @@ export class InkView implements PluginValue {
 		const p = this.pendingTap;
 		if (!p) return;
 		this.pendingTap = null;
-		window.clearTimeout(p.timer);
+		winOf(this.view).clearTimeout(p.timer);
 		p.discard();
 	}
 
@@ -2332,7 +1694,7 @@ export class InkView implements PluginValue {
 
 	private scheduleLive(): void {
 		if (this.raf) return;
-		this.raf = window.requestAnimationFrame(() => {
+		this.raf = winOf(this.view).requestAnimationFrame(() => {
 			this.raf = 0;
 			const a = this.active;
 			if (!a) return;
@@ -2473,13 +1835,9 @@ export class InkView implements PluginValue {
 		}
 		if (this.geo) this.store.setContentWidth(path, Math.round(this.geo.width));
 		this.store.addStroke(path, stroke);
-		if (box && this.geo && box.maxY > this.geo.height - 320) {
-			this.extraPages = Math.min(40, this.extraPages + 1);
-		}
+		if (box && this.geo) this.pageGuides.bumpIfNearBottom(box.maxY, this.geo.height);
 		if (a.tool === "pen" && !a.snap && settings.mathMode) {
-			this.mathBuffer.push(stroke.id);
-			this.showMathBufferBar();
-			this.armMathTimer();
+			this.formulaBar.recordPenStroke(stroke.id);
 		}
 		if (box) {
 			const now = performance.now();
@@ -2582,8 +1940,9 @@ export class InkView implements PluginValue {
 			r.el.classList.add("pl-hidden");
 			for (const el of pe.els.get(s) ?? []) el.remove();
 			const group = s.tool === "highlighter" ? this.gHlLive : this.gPenLive;
+			const svgDoc = docOf(this.view);
 			const els = next.map((pts) => {
-				const el = svgEl("path");
+				const el = svgEl(svgDoc, "path");
 				paint(el, s);
 				el.setAttribute("d", strokeToPath({ tool: s.tool, size: s.size, style: s.style, points: pts, ...(s.shape ? { shape: "polyline" as const } : {}) }));
 				group.appendChild(el);
@@ -2668,7 +2027,7 @@ export class InkView implements PluginValue {
 		const s = this.host.getSettings();
 		if (a.tool !== "pen" || !s.shapeSnap || a.geometry || a.snap || a.holdTimer !== null || a.holdTried) return;
 		const wait = Math.max(10, s.shapeHoldMs - (performance.now() - a.lastMoveAt));
-		a.holdTimer = window.setTimeout(() => this.onHold(a), wait);
+		a.holdTimer = winOf(this.view).setTimeout(() => this.onHold(a), wait);
 	}
 
 	private moveGeometry(geometry: DrawGeometry, point: XY): void {
@@ -2696,7 +2055,7 @@ export class InkView implements PluginValue {
 	}
 
 	private clearHold(a: DrawInput): void {
-		if (a.holdTimer !== null) window.clearTimeout(a.holdTimer);
+		if (a.holdTimer !== null) winOf(this.view).clearTimeout(a.holdTimer);
 		a.holdTimer = null;
 	}
 
@@ -2748,7 +2107,7 @@ export class InkView implements PluginValue {
 			// A tap: dismisses a selection or an open menu; on empty space it offers Paste.
 			this.clearSelection();
 			// [Stage F] a mouse click only deselects (Paste: right-click or Cmd+V).
-			if (!a.desk && !a.hadSelection && !a.menuWasOpen && this.host.clipboard) this.showPasteMenu([a.downX, a.downY]);
+			if (!a.desk && !a.hadSelection && !a.menuWasOpen && this.host.clipboard) this.selMenu.showPaste([a.downX, a.downY]);
 			return;
 		}
 		// [Stage F] rectangle drag: the rectangle is the loop (same touch rule).
@@ -2765,7 +2124,7 @@ export class InkView implements PluginValue {
 			return;
 		}
 		this.setSelection(sel);
-		this.showSelectionMenu();
+		this.selMenu.showSelection();
 		if (a.desk) this.host.deskSelectionMade(this);
 	}
 
@@ -2775,11 +2134,11 @@ export class InkView implements PluginValue {
 		if (this.active !== a || a.maxMove >= LONG_PRESS_MOVE || !this.host.clipboard) return;
 		a.longPressed = true;
 		a.el.remove();
-		this.showPasteMenu([a.downX, a.downY]);
+		this.selMenu.showPaste([a.downX, a.downY]);
 	}
 
 	private clearPress(a: LassoInput): void {
-		if (a.pressTimer !== null) window.clearTimeout(a.pressTimer);
+		if (a.pressTimer !== null) winOf(this.view).clearTimeout(a.pressTimer);
 		a.pressTimer = null;
 	}
 
@@ -2791,7 +2150,7 @@ export class InkView implements PluginValue {
 	}
 
 	clearSelection(): void {
-		if (this.menu?.kind === "selection") this.closeMenu();
+		if (this.selMenu.kind === "selection") this.selMenu.close();
 		if (!this.selection && !this.dragT) return;
 		this.selection = null;
 		this.dragT = null;
@@ -3042,7 +2401,7 @@ export class InkView implements PluginValue {
 	private paste(at: XY): void {
 		const clip = this.host.clipboard;
 		const path = this.path;
-		this.closeMenu();
+		this.selMenu.close();
 		if (!clip || !path || !this.store.isLoaded(path) || clip.strokes.length === 0) return;
 		const origin = pasteOrigin(clip, at, this.geo?.width ?? 0);
 		const placed = placeClip(clip, origin);
@@ -3082,16 +2441,17 @@ export class InkView implements PluginValue {
 
 	/** Theme colors for rasterizing ink (resolved now, from the editor's CSS variables). */
 	private lookAndFeel(): { background: string; paint: { ink: string; multiplyHighlighter: boolean; dark: boolean } } {
+		const doc = docOf(this.view);
 		const probe = this.view.scrollDOM.createDiv({ cls: "pl-color-probe" });
-		const cs = getComputedStyle(probe);
+		const cs = computedStyleOf(probe, doc);
 		const ink = cs.color || "#000";
 		let background = cs.backgroundColor;
 		probe.remove();
+		const dark = doc.body.classList.contains("theme-dark");
 		if (!background || background === "transparent" || background === "rgba(0, 0, 0, 0)") {
-			background = activeDocument.body.classList.contains("theme-dark") ? "#1e1e1e" : "#ffffff";
+			background = dark ? "#1e1e1e" : "#ffffff";
 		}
-		const dark = activeDocument.body.classList.contains("theme-dark");
-		return { background, paint: { ink, multiplyHighlighter: activeDocument.body.classList.contains("theme-light"), dark } };
+		return { background, paint: { ink, multiplyHighlighter: doc.body.classList.contains("theme-light"), dark } };
 	}
 
 	/** Open the screenshot modal for the current selection. */
@@ -3174,7 +2534,7 @@ export class InkView implements PluginValue {
 			e.stopPropagation();
 			this.suppressUntil = performance.now() + SUPPRESS_MS; // swallows the contextmenu event
 			this.clearSelection();
-			this.showPasteMenu([x, y]);
+			this.selMenu.showPaste([x, y]);
 			return;
 		}
 		e.preventDefault();
@@ -3187,19 +2547,19 @@ export class InkView implements PluginValue {
 		}
 		if (stroke) {
 			// Click selects the stroke; pressing and dragging moves it right away (desktop convention).
-			this.closeMenu();
+			this.selMenu.close();
 			this.setSelection([stroke]);
-			this.showSelectionMenu();
+			this.selMenu.showSelection();
 			this.host.deskSelectionMade(this);
 			this.startDrag(e.pointerId, "inside", x, y);
 			return;
 		}
 		const hadSelection = !!this.selection;
-		const menuWasOpen = !!this.menu;
+		const menuWasOpen = this.selMenu.isOpen;
 		this.clearSelection();
-		this.closeMenu();
+		this.selMenu.close();
 		const rect = this.host.deskSelect() === "rect";
-		const el = svgEl("path", "pl-lasso-path");
+		const el = svgEl(docOf(this.view), "path", "pl-lasso-path");
 		this.gUi.appendChild(el);
 		this.active = {
 			kind: "lasso",
@@ -3227,7 +2587,7 @@ export class InkView implements PluginValue {
 	 */
 	private exitSelectToText(x: number, y: number): void {
 		this.clearSelection();
-		this.closeMenu();
+		this.selMenu.close();
 		this.host.exitDeskSelect();
 		const r = this.svg.getBoundingClientRect();
 		const pos = this.view.posAtCoords({ x: r.left + x * this.effectiveScaleX(), y: r.top + y * this.effectiveScaleY() }, false);
@@ -3242,7 +2602,7 @@ export class InkView implements PluginValue {
 	 * a normal click in the note would, so Delete / Cmd+C reach the ink selection.
 	 */
 	private releaseOutsideFocus(): void {
-		const el = this.view.dom.ownerDocument.activeElement;
+		const el = docOf(this.view).activeElement;
 		if (el?.instanceOf(HTMLElement) && el !== el.ownerDocument.body && !this.view.dom.contains(el)) el.blur();
 	}
 
@@ -3271,7 +2631,7 @@ export class InkView implements PluginValue {
 		const [x, y] = this.clientToOverlay(e.clientX, e.clientY, this.svg.getBoundingClientRect());
 		this.hoverAt = [x, y];
 		if (this.hoverRaf) return;
-		this.hoverRaf = window.requestAnimationFrame(() => {
+		this.hoverRaf = winOf(this.view).requestAnimationFrame(() => {
 			this.hoverRaf = 0;
 			const at = this.hoverAt;
 			if (!at || this.active || this.host.deskSelect() === null) return;
@@ -3299,7 +2659,7 @@ export class InkView implements PluginValue {
 		switch (action) {
 			case "deselect":
 				this.clearSelection();
-				this.closeMenu();
+				this.selMenu.close();
 				break;
 			case "delete":
 				this.deleteSelection();
@@ -3345,32 +2705,6 @@ export class InkView implements PluginValue {
 		return [geo.width / 2, (vis.minY + vis.maxY) / 2];
 	}
 
-	// -------------------------------------------------------------------------------------------
-	// Selection box + context menu rendering
-	// -------------------------------------------------------------------------------------------
-
-	private showSelectionMenu(): void {
-		this.menu = { kind: "selection", colors: false };
-		this.menuKey = "";
-		this.buildMenu();
-		this.renderSelection();
-	}
-
-	private showPasteMenu(at: XY): void {
-		if (!this.host.clipboard) return;
-		this.menu = { kind: "paste", at };
-		this.menuKey = "";
-		this.buildMenu();
-		this.renderSelection();
-	}
-
-	private closeMenu(): void {
-		if (!this.menu) return;
-		this.menu = null;
-		this.menuKey = "";
-		if (this.menuEl) this.menuEl.classList.add("pl-hidden");
-	}
-
 	/** Draw the dashed selection box, its handle and the context menu (or hide them). */
 	private renderSelection(): void {
 		const box = this.selection && this.host.getSettings().inkVisible ? this.selectionBox() : null;
@@ -3389,472 +2723,21 @@ export class InkView implements PluginValue {
 			this.selHandle.setAttribute("cx", String(b.maxX));
 			this.selHandle.setAttribute("cy", String(b.maxY));
 		}
-		this.renderMenu(box);
-	}
-
-	private renderMenu(box: BBox | null): void {
-		// A selection always has its menu (hidden only while it is dragged/resized, below).
-		const next = menuForSelection(this.menu, !!box);
-		if (next !== this.menu) {
-			this.menu = next;
-			this.menuKey = "";
-			if (next) this.buildMenu();
-		}
-		const el = this.menuEl;
-		if (!el) return;
-		// Hidden while the selection is being moved/resized (a press that hasn't moved yet may be a tap).
 		const dragging = this.active?.kind === "drag" && this.active.maxMove >= SEL_TAP_MOVE;
-		if (!this.menu || !this.geo || dragging || !this.host.getSettings().inkVisible) {
-			el.classList.add("pl-hidden");
-			return;
-		}
-		const sx = this.effectiveScaleX();
-		const sy = this.effectiveScaleY();
-		const sd = this.view.scrollDOM;
-		const sRect = sd.getBoundingClientRect();
-		const sdScaleX = sd.offsetWidth > 0 && sRect.width > 0 ? sRect.width / sd.offsetWidth : 1;
-		const sdScaleY = sd.offsetHeight > 0 && sRect.height > 0 ? sRect.height / sd.offsetHeight : 1;
-		const svgRect = this.svg.getBoundingClientRect();
-		const ox = (svgRect.left - sRect.left) / sdScaleX + sd.scrollLeft;
-		const oy = (svgRect.top - sRect.top) / sdScaleY + sd.scrollTop;
-		const target: BBox =
-			this.menu.kind === "paste"
-				? { minX: this.menu.at[0], minY: this.menu.at[1], maxX: this.menu.at[0], maxY: this.menu.at[1] }
-				: box!;
-		const t: BBox = {
-			minX: target.minX * (sx / sdScaleX) + ox,
-			minY: target.minY * (sy / sdScaleY) + oy,
-			maxX: target.maxX * (sx / sdScaleX) + ox,
-			maxY: target.maxY * (sy / sdScaleY) + oy,
-		};
-		el.classList.remove("pl-hidden");
-		const w = el.offsetWidth;
-		const h = el.offsetHeight;
-		const key = `${this.menu.kind}:${this.menu.kind === "selection" && this.menu.colors}:${t.minX},${t.minY},${t.maxX},${t.maxY}:${w}x${h}`;
-		// Placed once per target/content: scrolling the note doesn't make it jump around.
-		if (key === this.menuKey) return;
-		this.menuKey = key;
-		const visible: BBox = { minX: sd.scrollLeft, minY: sd.scrollTop, maxX: sd.scrollLeft + sd.clientWidth, maxY: sd.scrollTop + sd.clientHeight };
-		const p = placeMenu(t, { width: w, height: h }, visible);
-		el.style.left = `${p.left}px`;
-		el.style.top = `${p.top}px`;
-		el.dataset.side = p.side;
-	}
-
-	private ensureMenuEl(): HTMLElement {
-		if (this.menuEl) return this.menuEl;
-		const el = this.view.scrollDOM.createDiv({ cls: "pl-menu", attr: { role: "menu" } });
-		// Never take focus from the editor; never let CM or our ink handlers see these presses.
-		const keep = (e: Event) => {
-			e.preventDefault();
-			e.stopPropagation();
-		};
-		el.addEventListener("pointerdown", keep);
-		el.addEventListener("mousedown", keep);
-		el.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
-		// Pencil taps: no Scribble on the menu; items activate on pen pointerup (tap.ts).
-		blockStylusTouch(el);
-		this.menuEl = el;
-		return el;
-	}
-
-	private buildMenu(): void {
-		const el = this.ensureMenuEl();
-		el.empty();
-		const m = this.menu;
-		if (!m) return;
-		if (m.kind === "paste") {
-			const at = m.at;
-			this.menuItem(el, "clipboard-paste", "Paste", () => this.paste(at));
-			return;
-		}
-		if (m.colors) {
-			this.menuItem(el, "chevron-left", "Back", () => this.setColorsOpen(false), "pl-menu-back");
-			const palette = this.colorTool() === "pen" ? PEN_COLORS : HIGHLIGHTER_COLORS;
-			for (const c of palette) {
-				const b = this.menuItem(el, null, c.label, () => this.recolorSelection(c.value), "pl-menu-color");
-				b.createSpan({ cls: "pl-color-dot" }).style.background = cssColor(c.value);
-			}
-			return;
-		}
-		this.menuItem(el, "copy", "Copy", () => this.copySelection());
-		this.menuItem(el, "scissors", "Cut", () => this.cutSelection());
-		this.menuItem(el, "copy-plus", "Duplicate", () => this.duplicateSelection());
-		this.menuItem(el, "trash-2", "Delete", () => this.deleteSelection());
-		this.menuItem(el, "palette", "Color", () => this.setColorsOpen(true), "pl-menu-sub");
-		this.menuItem(el, "fx", "To LaTeX", () => void this.convertSelectionToLatex());
-		if (this.host.openAssistant) {
-			this.menuItem(el, "sparkles", "Frag KI", () => this.askGeminiOnSelection());
-		}
-		this.menuItem(el, "camera", "Screenshot", () => this.screenshotSelection());
-	}
-
-	private setColorsOpen(open: boolean): void {
-		if (this.menu?.kind !== "selection") return;
-		this.menu.colors = open;
-		this.buildMenu();
-		this.renderSelection();
-	}
-
-	/** A menu entry: icon + label (color swatches show only the swatch; the label is for a11y). */
-	private menuItem(parent: HTMLElement, icon: string | null, label: string, run: () => void, cls = ""): HTMLElement {
-		const b = parent.createDiv({
-			cls: `pl-menu-item ${cls}`.trim(),
-			attr: { role: "menuitem", tabindex: "-1", "aria-label": label },
-		});
-		if (icon === "fx") {
-			const span = b.createSpan({ cls: "pl-menu-icon pl-fx-badge", text: "fx" });
-			if (!span.parentElement) b.appendChild(span);
-			b.createSpan({ cls: "pl-menu-label", text: label });
-		} else if (icon) {
-			setIcon(b.createSpan({ cls: "pl-menu-icon" }), icon);
-			if (cls !== "pl-menu-back") b.createSpan({ cls: "pl-menu-label", text: label });
-		} else {
-			setTooltip(b, label, { placement: "top" });
-		}
-		if (cls === "pl-menu-sub") setIcon(b.createSpan({ cls: "pl-menu-chevron" }), "chevron-right");
-		onTap(b, run);
-		return b;
-	}
-
-	// -------------------------------------------------------------------------------------------
-	// Tap anywhere to type + handwritten formulas → LaTeX
-	// -------------------------------------------------------------------------------------------
-
-	private readonly onEditorClick = (e: MouseEvent): void => {
-		const tap = this.lastCompletedTap;
-		this.lastCompletedTap = null;
-		if (!tap || performance.now() - tap.at > 400) return;
-		if (e.defaultPrevented || this.active || this.selection) return;
-		const s = this.host.getSettings();
-		if (s.mouseDraws || this.host.deskSelect() !== null) return;
-		if (this.isUiTarget(e.target) || this.isInteractiveEditorTarget(e.target)) return;
-		if (!this.view.state.selection.main.empty) return;
-		this.applyTapToType(e.clientX || tap.x, e.clientY || tap.y, e.target);
-	};
-
-	private lineInfoAt(lineNumber: number, svgRect: DOMRect, sx: number): TapLineInfo {
-		const doc = this.view.state.doc;
-		const line = doc.line(lineNumber);
-		const sy = this.view.scaleY || 1;
-		const block = this.view.lineBlockAt(line.from);
-		const top = unzoomedLineTop(this.view, line.from);
-		const height = (block.bottom - block.top) / sy;
-		const endCoords = this.view.coordsAtPos(line.to);
-		const lineEndX = endCoords ? Math.max(0, (endCoords.right - svgRect.left) / sx) : 0;
-		return { top, bottom: top + height, lineTo: line.to, lineEndX };
-	}
-
-	private applyTapToType(clientX: number, clientY: number, target: EventTarget | null): void {
-		if (this.destroyed) return;
-		this.applyGeometry(this.readGeometry(this.view));
-		const geo = this.geo;
-		if (!geo) return;
-		const rect = this.svg.getBoundingClientRect();
-		const sx = this.effectiveScaleX();
-		const [tapX, tapY] = this.clientToOverlay(clientX, clientY, rect);
-		const sy = this.view.scaleY || 1;
-		const lineH = (this.view.defaultLineHeight || 24) / sy;
-		const charW = (this.view.defaultCharacterWidth || 8.5) / (this.view.scaleX || 1);
-		const doc = this.view.state.doc;
-		const lastLine = this.lineInfoAt(doc.lines, rect, sx);
-		let lineAtTap: TapLineInfo | undefined;
-		if (tapY <= lastLine.bottom + lineH * 0.4) {
-			const block = this.view.lineBlockAtHeight(Math.max(0, tapY) * sy);
-			const line = doc.lineAt(block.from);
-			lineAtTap = this.lineInfoAt(line.number, rect, sx);
-		}
-		const plan = planTapToType({
-			docLength: doc.length,
-			lineHeight: lineH,
-			charWidth: charW,
-			tapX,
-			tapY,
-			lastLine,
-			lineAtTap,
-		});
-		if (plan) {
-			this.view.dispatch({
-				changes: { from: plan.from, to: plan.from, insert: plan.insert },
-				selection: { anchor: plan.anchor },
-				userEvent: "input",
-			});
-			this.view.focus();
-			return;
-		}
-		if (target instanceof Node && !this.view.contentDOM.contains(target)) {
-			const clampedX = rect.left + Math.max(4, Math.min(Math.max(4, geo.width - 4), tapX)) * sx;
-			const pos = this.view.posAtCoords({ x: clampedX, y: clientY }, false);
-			this.view.dispatch({ selection: { anchor: pos }, userEvent: "select.pointer" });
-			this.view.focus();
-		}
-	}
-
-	private clearMathBuffer(): void {
-		if (this.mathTimer !== null) {
-			window.clearTimeout(this.mathTimer);
-			this.mathTimer = null;
-		}
-		this.mathBuffer = [];
-		if (!this.pendingMath) this.clearMathBar();
-	}
-
-	private clearMathBar(): void {
-		this.pendingMath = null;
-		this.mathBarEl?.remove();
-		this.mathBarEl = null;
-	}
-
-	private ensureMathBar(): HTMLElement | null {
-		const leaf = this.view.scrollDOM.closest?.<HTMLElement>(".workspace-leaf-content") ?? null;
-		if (!leaf || typeof leaf.createDiv !== "function") return null;
-		if (!this.mathBarEl || !this.mathBarEl.isConnected) {
-			const bar = leaf.createDiv({ cls: "pl-math-bar" });
-			bar.addEventListener("pointerdown", (e) => e.stopPropagation());
-			blockStylusTouch(bar);
-			this.mathBarEl = bar;
-		}
-		return this.mathBarEl;
-	}
-
-	private showMathBufferBar(): void {
-		const bar = this.ensureMathBar();
-		if (!bar) return;
-		bar.empty();
-		const count = this.mathBuffer.length;
-		bar.createSpan({ cls: "pl-math-status", text: `Formel (${count} ${count === 1 ? "Strich" : "Striche"})` });
-		const go = bar.createEl("button", { cls: "mod-cta pl-math-btn", text: "→ LaTeX" });
-		onTap(go, () => {
-			if (this.mathTimer !== null) {
-				window.clearTimeout(this.mathTimer);
-				this.mathTimer = null;
-			}
-			void this.flushMathBuffer();
-		});
-		const cancel = bar.createEl("button", { cls: "pl-math-btn", text: "×" });
-		onTap(cancel, () => {
-			this.clearMathBuffer();
-			this.clearMathBar();
-		});
-	}
-
-	private showMathConfirmBar(pending: { path: string; strokeIds: string[]; rawTex: string; midY: number; box: BBox }, usedVision: boolean): void {
-		const bar = this.ensureMathBar();
-		if (!bar) {
-			// Headless / test environment fallback: commit immediately.
-			this.pendingMath = pending;
-			this.commitPendingMath(pending.rawTex);
-			return;
-		}
-		this.pendingMath = pending;
-		bar.empty();
-		bar.createSpan({ cls: "pl-math-badge", text: usedVision ? "Gemini LaTeX" : "LaTeX" });
-		const input = bar.createEl("input", {
-			cls: "pl-math-input",
-			type: "text",
-			value: pending.rawTex,
-			attr: { "aria-label": "Erkannte LaTeX-Formel bearbeiten" },
-		});
-		input.addEventListener("keydown", (e) => {
-			if (e.key === "Enter") {
-				e.preventDefault();
-				this.commitPendingMath(input.value);
-			} else if (e.key === "Escape") {
-				e.preventDefault();
-				this.clearMathBar();
-			}
-		});
-		const insertBtn = bar.createEl("button", { cls: "mod-cta pl-math-btn", text: "Einfügen" });
-		onTap(insertBtn, () => this.commitPendingMath(input.value));
-		if (this.host.openAssistant) {
-			const geminiBtn = bar.createEl("button", { cls: "pl-math-btn", text: "Gemini" });
-			onTap(geminiBtn, () => {
-				const ink = this.store.get(pending.path);
-				const ids = new Set(pending.strokeIds);
-				const src = (ink?.strokes ?? []).filter((s) => ids.has(s.id));
-				if (src.length > 0) this.openGeminiForStrokes(src, "Wandle diese handschriftliche Formel in sauberes Obsidian-LaTeX ($...$ / $$...$$) um.");
-			});
-		}
-		const cancelBtn = bar.createEl("button", { cls: "pl-math-btn", text: "Behalten" });
-		onTap(cancelBtn, () => this.clearMathBar());
-	}
-
-	private commitPendingMath(rawTex: string): boolean {
-		const pending = this.pendingMath;
-		this.clearMathBar();
-		if (!pending || this.destroyed || this.path !== pending.path || !this.store.isLoaded(pending.path)) return false;
-		const settings = this.host.getSettings();
-		const formatted = formatLatexFormula(rawTex, settings.mathDelimiters);
-		if (!formatted) {
-			new Notice("Leere Formel — Handschrift wurde behalten.");
-			return false;
-		}
-		const ink = this.store.get(pending.path);
-		const onCanvas = new Set((ink?.strokes ?? []).map((s) => s.id));
-		const removeIds = pending.strokeIds.filter((id) => onCanvas.has(id));
-		if (removeIds.length > 0) this.store.removeStrokes(pending.path, removeIds, newId());
-
-		this.applyGeometry(this.readGeometry(this.view));
-		const rect = this.svg.getBoundingClientRect();
-		const sx = this.effectiveScaleX();
-		const doc = this.view.state.doc;
-		const sy = this.view.scaleY || 1;
-		const lineH = (this.view.defaultLineHeight || 24) / sy;
-		const lastLine = this.lineInfoAt(doc.lines, rect, sx);
-		const midY = pending.midY;
-		const targetLine = midY <= lastLine.bottom + lineH * 0.4
-			? doc.lineAt(this.view.lineBlockAtHeight(Math.max(0, midY) * sy).from)
-			: doc.line(doc.lines);
-		const { prefixNewlines, from } = insertionPosForY(midY, lastLine, lineH, targetLine.to, doc.length);
-		const existingLine = doc.lineAt(from);
-		const leading =
-			prefixNewlines > 0
-				? "\n".repeat(prefixNewlines)
-				: existingLine.text.trim().length > 0 && formatted.startsWith("$$")
-					? "\n"
-					: existingLine.length > 0
-						? " "
-						: "";
-		const insert = `${leading}${formatted}`;
-		this.view.dispatch({
-			changes: { from, to: from, insert },
-			selection: { anchor: from + insert.length },
-			userEvent: "input",
-		});
-		new Notice(`LaTeX eingefügt: ${formatted}`, 2500);
-		return true;
-	}
-
-	private armMathTimer(): void {
-		if (this.mathTimer !== null) window.clearTimeout(this.mathTimer);
-		const delay = this.host.getSettings().mathAutoDelayMs || 1600;
-		this.mathTimer = window.setTimeout(() => {
-			this.mathTimer = null;
-			void this.flushMathBuffer();
-		}, delay);
-	}
-
-	private async flushMathBuffer(): Promise<void> {
-		const path = this.path;
-		const ids = new Set(this.mathBuffer);
-		this.mathBuffer = [];
-		if (ids.size === 0 || !path || !this.store.isLoaded(path) || this.destroyed) return;
-		const ink = this.store.get(path);
-		if (!ink) return;
-		const strokes = ink.strokes.filter((s) => ids.has(s.id));
-		if (strokes.length === 0) return;
-		await this.convertStrokesToLatex(strokes);
+		this.selMenu.render(box, !!this.geo, dragging, this.svg.getBoundingClientRect(), this.effectiveScaleX(), this.effectiveScaleY());
 	}
 
 	async convertSelectionToLatex(): Promise<void> {
 		const sel = this.selection;
 		if (!sel || sel.length === 0) return;
-		const ok = await this.convertStrokesToLatex(sel);
+		const ok = await this.formulaBar.convertStrokesToLatex(sel);
 		if (ok) this.clearSelection();
 	}
 
 	private askGeminiOnSelection(): void {
 		const sel = this.selection;
 		if (!sel || sel.length === 0) return;
-		this.openGeminiForStrokes(sel);
-	}
-
-	private openGeminiForStrokes(strokes: readonly Stroke[], initialPrompt?: string): void {
-		const path = this.path;
-		if (!path || !this.host.openAssistant || strokes.length === 0) return;
-		const overlayStrokes: Stroke[] = [];
-		let minX = Infinity;
-		let minY = Infinity;
-		let maxX = -Infinity;
-		let maxY = -Infinity;
-		for (const s of strokes) {
-			const [ox, top] = this.place(s);
-			const pts = s.points.map((p): Point => [p[0] + ox, p[1] + top, p[2]]);
-			const b = bbox(pts);
-			if (!b) continue;
-			minX = Math.min(minX, b.minX);
-			minY = Math.min(minY, b.minY);
-			maxX = Math.max(maxX, b.maxX);
-			maxY = Math.max(maxY, b.maxY);
-			overlayStrokes.push({ ...s, points: pts });
-		}
-		if (overlayStrokes.length === 0 || !Number.isFinite(minX)) return;
-		const png = strokesToPngBase64(overlayStrokes, { minX, minY, maxX, maxY });
-		const noteTitle = path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/i, "");
-		const noteContext = this.view.state.doc.toString();
-		this.host.openAssistant({
-			noteTitle,
-			noteContext,
-			imageBase64Png: png,
-			initialPrompt,
-			insertAtCursor: (text) => {
-				if (this.destroyed || this.path !== path) return false;
-				const st = this.view.state;
-				const head = st.selection.main.head;
-				const prefix = head > 0 && st.doc.sliceString(head - 1, head) !== "\n" ? "\n\n" : "";
-				const ins = `${prefix}${text}\n`;
-				this.view.dispatch({
-					changes: { from: head, insert: ins },
-					selection: { anchor: head + ins.length },
-					userEvent: "input",
-				});
-				return true;
-			},
-		});
-	}
-
-	private async convertStrokesToLatex(strokes: readonly Stroke[]): Promise<boolean> {
-		const path = this.path;
-		if (!path || !this.store.isLoaded(path) || this.destroyed || strokes.length === 0) return false;
-		const overlayStrokes: Stroke[] = [];
-		let minX = Infinity;
-		let minY = Infinity;
-		let maxX = -Infinity;
-		let maxY = -Infinity;
-		for (const s of strokes) {
-			if (s.tool === "highlighter") continue;
-			const [ox, top] = this.place(s);
-			const pts = s.points.map((p): Point => [p[0] + ox, p[1] + top, p[2]]);
-			const b = bbox(pts);
-			if (!b) continue;
-			minX = Math.min(minX, b.minX);
-			minY = Math.min(minY, b.minY);
-			maxX = Math.max(maxX, b.maxX);
-			maxY = Math.max(maxY, b.maxY);
-			overlayStrokes.push({ ...s, points: pts });
-		}
-		if (overlayStrokes.length === 0 || !Number.isFinite(minX)) return false;
-
-		const settings = this.host.getSettings();
-		const box: BBox = { minX, minY, maxX, maxY };
-		const bar = this.ensureMathBar();
-		if (bar) {
-			bar.empty();
-			bar.createSpan({ cls: "pl-math-status", text: "Formel wird erkannt…" });
-		}
-		const { tex: rawTex, usedVision } = await recognizeMathStrokes(overlayStrokes, box, {
-			provider: settings.mathProvider,
-			apiKey: settings.mathApiKey,
-			geminiApiKey: settings.geminiApiKey,
-			geminiModel: settings.geminiModel,
-		});
-		if (this.destroyed || this.path !== path || !this.store.isLoaded(path)) return false;
-		if (!rawTex.trim()) {
-			this.clearMathBar();
-			new Notice("Keine Formel erkannt — tippe auf das Lasso-Menü oder hinterlege einen Gemini API-Key für handschriftliche Formeln.");
-			return false;
-		}
-		this.showMathConfirmBar(
-			{
-				path,
-				strokeIds: strokes.map((s) => s.id),
-				rawTex,
-				midY: (minY + maxY) / 2,
-				box,
-			},
-			usedVision,
-		);
-		return true;
+		this.formulaBar.openGeminiForStrokes(sel);
 	}
 }
 

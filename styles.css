@@ -1,10 +1,9 @@
 /* ---------- Ink overlay ---------- */
 
-/* Room to draw or tap to type past the end of the note — always scrollable even on blank pages. */
-.markdown-source-view.mod-cm6 .cm-content.ink-pages-content,
-.cm-content.ink-pages-content {
-	min-height: 120vh !important;
-	padding-bottom: 120vh;
+/* Room to draw past the end of the note — applied dynamically only when ink is visible. */
+.markdown-source-view.mod-cm6 .cm-content.ink-pages-content.pl-canvas-room,
+.cm-content.ink-pages-content.pl-canvas-room {
+	padding-bottom: var(--pl-canvas-pad-bottom, 0px);
 }
 
 .pl-zoom-spacer {
@@ -88,7 +87,11 @@
 }
 
 .pl-zoom-target {
+	transform: scale(var(--pl-zoom-scale, 1));
 	transform-origin: 0 0;
+	width: var(--pl-zoom-width, auto);
+	min-width: var(--pl-zoom-width, 0);
+	max-width: var(--pl-zoom-width, none);
 	box-sizing: border-box !important;
 	flex-grow: 0 !important;
 	flex-shrink: 0 !important;

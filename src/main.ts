@@ -789,6 +789,10 @@ class PencilSettingTab extends PluginSettingTab {
 				return d.setValue(s.pageGuide).onChange((v) => this.plugin.updateSettings({ pageGuide: v as PageGuideFormat }));
 			});
 		new Setting(containerEl)
+			.setName("Tap empty space to type (this device)")
+			.setDesc("Tapping open space inserts temporary line/space padding so you can start typing at that spot; unused padding is removed automatically if you move away or draw without typing.")
+			.addToggle((t) => t.setValue(s.tapToType).onChange((v) => this.plugin.updateSettings({ tapToType: v })));
+		new Setting(containerEl)
 			.setName("Default export style")
 			.setDesc(`Themed: the PDF looks like the note in Obsidian (theme, snippets). Document: a plain document look (white page, black text, 12 pt, plain headings), handy for handing in work. Used by Obsidian's own export and "Export PDF with / without ink"; the ⋯ menu also offers the other style ("${styleExportLabel("document")}" / "${styleExportLabel("themed")}") for one export.`)
 			.addDropdown((d) =>

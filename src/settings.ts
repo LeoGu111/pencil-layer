@@ -144,6 +144,8 @@ export interface LocalSettings {
 	geminiModel: GeminiModel;
 	/** Visual sheet boundary guides in editor (A4, A3, Letter, or off) matching PDF print dimensions. */
 	pageGuide: PageGuideFormat;
+	/** Tap empty space in the note to pad newlines/NBSP so the cursor lands there (auto-cleaned if unused). */
+	tapToType: boolean;
 	/**
 	 * Per-device settings schema version. 2 (Stage F): the desktop toolbar (now the slim Select
 	 * variant) is shown by default — see `sanitizeLocal`.
@@ -175,6 +177,7 @@ export const LOCAL_KEYS: readonly (keyof LocalSettings)[] = [
 	"geminiApiKey",
 	"geminiModel",
 	"pageGuide",
+	"tapToType",
 	"eraserMode",
 	"eraserSize",
 	"eraseHighlighterOnly",
@@ -307,6 +310,7 @@ export function defaultLocal(_isMobile: boolean): LocalSettings {
 		geminiApiKey: "",
 		geminiModel: "gemini-4-hydrogen",
 		pageGuide: "A4",
+		tapToType: true,
 		eraserMode: "stroke",
 		eraserSize: "m",
 		eraseHighlighterOnly: false,
@@ -480,6 +484,7 @@ export function sanitizeLocal(raw: unknown, isMobile: boolean): LocalSettings {
 		geminiApiKey: typeof r.geminiApiKey === "string" ? r.geminiApiKey : d.geminiApiKey,
 		geminiModel: sanitizeGeminiModel(r.geminiModel, d.geminiModel),
 		pageGuide: oneOf(PAGE_GUIDE_FORMATS, r.pageGuide, d.pageGuide),
+		tapToType: bool(r.tapToType, d.tapToType),
 		eraserMode: oneOf(ERASER_MODES, r.eraserMode, d.eraserMode),
 		eraserSize: oneOf(ERASER_SIZES, r.eraserSize, d.eraserSize),
 		eraseHighlighterOnly: bool(r.eraseHighlighterOnly, d.eraseHighlighterOnly),
