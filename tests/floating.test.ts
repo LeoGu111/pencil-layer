@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { EDGE_HYSTERESIS, FLOAT_BOTTOM, FLOAT_MARGIN, nearestEdge, orientationOf, placeFloating, placePopover, popoverSide, toFloatPos } from "../src/floating";
+import {
+	EDGE_HYSTERESIS,
+	FLOAT_BOTTOM,
+	FLOAT_MARGIN,
+	nearestEdge,
+	orientationOf,
+	placeFloating,
+	placePopover,
+	popoverSide,
+	snapPreset,
+	statusBarInset,
+	stripScrollState,
+	stripWheelDelta,
+	toFloatPos,
+} from "../src/floating";
 
 const area = { w: 800, h: 600 };
 const bar = { w: 400, h: 46 };
@@ -97,5 +111,52 @@ describe("popover placement", () => {
 		expect(placePopover("left", { ...vbar, left: 938 }, { ...vbtn, top: 500 }, pop, area)).toEqual({ left: 938 - 8 - 240, top: 521 - 150 });
 		// Too tall for the area: pinned to the top margin.
 		expect(placePopover("below", { ...bar, top: 20 }, btn, { w: 240, h: 900 }, area).top).toBe(8);
+	});
+});
+
+describe("statusBarInset (issue #12)", () => {
+	const leaf = { left: 345, top: 40, right: 1280, bottom: 850 };
+	const statusBar = { left: 986, top: 823, right: 1280, bottom: 850 };
+
+	it("reserves the status bar height when it overlaps the bottom of the leaf", () => {
+		const inset = statusBarInset(leaf, statusBar);
+		expect(inset).toBe(27);
+		const usableArea = { w: leaf.right - leaf.left, h: leaf.bottom - leaf.top - inset };
+		const expandedBar = { w: 821, h: 46 };
+		const p = placeFloating(usableArea, expandedBar, null);
+		const barBottomInWindow = leaf.top + p.top + expandedBar.h;
+		expect(barBottomInWindow).toBe(statusBar.top - FLOAT_BOTTOM);
+		expect(barBottomInWindow).toBeLessThan(statusBar.top);
+		// Bottom-right snap preset also clears the status bar by FLOAT_MARGIN.
+		const br = placeFloating(usableArea, expandedBar, snapPreset("bottom-right").pos);
+		expect(leaf.top + br.top + expandedBar.h).toBe(statusBar.top - FLOAT_MARGIN);
+	});
+
+	it("returns 0 when the status bar is absent, hidden, in another pane, or not at the bottom", () => {
+		expect(statusBarInset(leaf, null)).toBe(0);
+		expect(statusBarInset(leaf, { left: 0, top: 0, right: 0, bottom: 0 })).toBe(0);
+		// Left split pane doesn't reach the bottom-right status bar.
+		expect(statusBarInset({ left: 345, top: 40, right: 800, bottom: 850 }, statusBar)).toBe(0);
+		// Top split pane ends well above the status bar.
+		expect(statusBarInset({ left: 345, top: 40, right: 1280, bottom: 440 }, statusBar)).toBe(0);
+		// Status bar positioned at top should not eat bottom space.
+		expect(statusBarInset(leaf, { left: 986, top: 40, right: 1280, bottom: 67 })).toBe(0);
+	});
+});
+
+describe("color strip wheel & scroll state (issue #12)", () => {
+	it("maps vertical wheel events to horizontal scroll and normalizes line/page deltaMode", () => {
+		expect(stripWheelDelta(0, 100, 0, 128, false)).toBe(100);
+		expect(stripWheelDelta(0, 3, 1, 128, false)).toBe(96);
+		expect(stripWheelDelta(0, 1, 2, 128, false)).toBe(128);
+		expect(stripWheelDelta(-40, 10, 0, 128, false)).toBe(-40);
+		expect(stripWheelDelta(40, 120, 0, 128, true)).toBe(120);
+	});
+
+	it("reports prev/next scrollability accurately across 7 swatches", () => {
+		expect(stripScrollState(0, 224, 224)).toEqual({ canPrev: false, canNext: false });
+		expect(stripScrollState(0, 128, 224)).toEqual({ canPrev: false, canNext: true });
+		expect(stripScrollState(32, 128, 224)).toEqual({ canPrev: true, canNext: true });
+		expect(stripScrollState(96, 128, 224)).toEqual({ canPrev: true, canNext: false });
 	});
 });

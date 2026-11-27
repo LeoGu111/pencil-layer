@@ -87,6 +87,53 @@ export interface Rect {
 	h: number;
 }
 
+/** Viewport bounds (matches `DOMRect` fields used for leaf / status-bar geometry). */
+export interface Bounds {
+	left: number;
+	top: number;
+	right: number;
+	bottom: number;
+}
+
+/**
+ * Bottom inset (px) needed inside `leaf` so the floating toolbar and its popovers stay clear of
+ * a bottom-docked Obsidian `.status-bar`. Returns 0 when the status bar has no area, does not
+ * overlap `leaf` horizontally, or does not sit in the lower half of `leaf`.
+ */
+export function statusBarInset(leaf: Bounds, statusBar: Bounds | null): number {
+	if (!statusBar) return 0;
+	const leafW = leaf.right - leaf.left;
+	const leafH = leaf.bottom - leaf.top;
+	const sbW = statusBar.right - statusBar.left;
+	const sbH = statusBar.bottom - statusBar.top;
+	if (leafW <= 0 || leafH <= 0 || sbW <= 0 || sbH <= 0) return 0;
+	if (statusBar.right <= leaf.left || statusBar.left >= leaf.right) return 0;
+	if (statusBar.top < leaf.top + leafH / 2 || statusBar.top >= leaf.bottom || statusBar.bottom <= leaf.top) return 0;
+	return Math.min(leafH, leaf.bottom - statusBar.top);
+}
+
+/** Default swatch step (px) used when translating line-mode mouse wheel ticks into strip scroll. */
+const WHEEL_LINE_PX = 32;
+
+/**
+ * Scroll delta (px) for a wheel event over the color strip. Maps vertical wheel ticks to horizontal
+ * scrolling when horizontal, and normalizes line/page wheel modes (`deltaMode` 1 and 2).
+ */
+export function stripWheelDelta(deltaX: number, deltaY: number, deltaMode: number, clientSize: number, vertical: boolean): number {
+	const unit = deltaMode === 1 ? WHEEL_LINE_PX : deltaMode === 2 ? Math.max(WHEEL_LINE_PX, clientSize) : 1;
+	const dx = deltaX * unit;
+	const dy = deltaY * unit;
+	return vertical ? dy : Math.abs(dx) > Math.abs(dy) ? dx : dy;
+}
+
+/** Whether the color strip can scroll backward or forward from `pos`. */
+export function stripScrollState(pos: number, client: number, total: number): { canPrev: boolean; canNext: boolean } {
+	return {
+		canPrev: pos > 1,
+		canNext: total - client - pos > 1,
+	};
+}
+
 /**
  * Side of the bar a popover opens on: toward the side of the area with more room — above/below for
  * a horizontal bar, left/right for a vertical one.
