@@ -1115,7 +1115,6 @@
 }
 .pl-reading-slice-svg {
 	overflow: hidden !important;
-	mix-blend-mode: multiply;
 }
 .print .markdown-preview-view:has(.pl-reading-room),
 .print .markdown-preview-view:has(.pl-reading-space) {

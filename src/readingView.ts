@@ -34,7 +34,7 @@ import { charNeedle, charOrigin } from "./charAnchor";
 import type { ExportOptions } from "./exportOnce";
 import { DOC_FONT_VAR, DOC_STYLE_CLASS, ExportStyle, docFontStack, inkYScale, scaleInkY } from "./docStyle";
 import { pageGuidePrintConfig } from "./pageGuides";
-import { Band, inSlice, padExtents, planSlices } from "./printSlices";
+import { Band, Pager, inSlice, padExtents, planSlices } from "./printSlices";
 import {
 	LineMark,
 	LineRange,
@@ -114,6 +114,8 @@ interface Layout {
 	yScale?: number;
 	/** Printable sheet height in px during PDF export (for clean multi-page slicing). */
 	pageHeight?: number;
+	/** Viewport Y of the print root's top edge (page 1 start) for page-offset slicing. */
+	printTop?: number;
 	/** Optional per-render deduplication set so a stroke is never painted twice across sections. */
 	drawnIds?: Set<string>;
 }
@@ -392,6 +394,24 @@ function svgEl<K extends keyof SVGElementTagNameMap>(doc: Document, tag: K): SVG
 	return doc.createElementNS<K>(SVG_NS, tag);
 }
 
+/** Create a positioned ink SVG with inline styles (for Reading view and the hidden desktop print window). */
+function createReadingSvg(doc: Document, cls: string, width: number, height: number, multiply: boolean, clip = false): SVGSVGElement {
+	const svg = svgEl(doc, "svg");
+	svg.setAttribute("class", cls);
+	svg.setAttribute("aria-hidden", "true");
+	const st = svg.style;
+	st.position = "absolute";
+	st.left = "0";
+	st.top = "0";
+	st.overflow = clip ? "hidden" : "visible";
+	st.pointerEvents = "none";
+	st.zIndex = "5";
+	if (multiply) st.mixBlendMode = "multiply";
+	svg.setAttribute("width", String(Math.max(1, width)));
+	svg.setAttribute("height", String(Math.max(1, height)));
+	return svg;
+}
+
 /** Paint an ink path like the editor overlay (centerline pens stroked, everything else filled). */
 function paintPath(el: SVGPathElement, s: Pick<Stroke, "tool" | "style" | "size" | "color">, target: InkTarget): void {
 	// [Stage L] theme-adaptive on screen (CSS variables), black on white paper in print.
@@ -512,20 +532,9 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	const marks = measureMarks(el, lines, lineStart, lineEnd, top, sy);
 	const yOf = (line: number) => lineTop(line, marks, lineStart, lineEnd, height, lh);
 	const target: InkTarget = lay.print ? "paper" : "screen";
+	const multiply = doc.body.classList.contains("theme-light") || lay.print;
 
-	const svg = svgEl(doc, "svg");
-	svg.setAttribute("class", SVG_CLASS);
-	svg.setAttribute("aria-hidden", "true");
-	const st = svg.style;
-	st.position = "absolute";
-	st.left = "0";
-	st.top = "0";
-	st.overflow = "visible";
-	st.pointerEvents = "none";
-	st.zIndex = "5";
-	svg.setAttribute("width", String(Math.max(1, Math.round(elRect.width / sx))));
-	svg.setAttribute("height", String(Math.max(1, Math.round(height))));
-	if (doc.body.classList.contains("theme-light") || lay.print) st.mixBlendMode = "multiply";
+	const svg = createReadingSvg(doc, SVG_CLASS, Math.round(elRect.width / sx), Math.round(height), multiply);
 	const gHl = svgEl(doc, "g");
 	gHl.setAttribute("class", "pl-hl");
 	const gPen = svgEl(doc, "g");
@@ -579,51 +588,58 @@ function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	}
 
 	for (const c of existing) c.remove();
+	for (const c of Array.from(el.children)) if (c.classList.contains(ROOM_SLICE_CLASS)) c.remove();
 	if (!el.classList.contains(HOST_CLASS)) el.classList.add(HOST_CLASS);
 	el.appendChild(svg);
 	// Room for ink drawn in the blank lines below the block (they collapse in Reading view).
 	// The note's last section also makes room for ink drawn below the end of the note (Stage I).
 	const atEnd = range.to >= lines.length - 1;
 	const roomPx = reserveSpace(inkBottom, height, range.to - lineEnd, lh, { atEnd, pad: atEnd ? 2 : 4 });
-	if (lay.print && atEnd && lay.pageHeight && roomPx > lay.pageHeight) {
-		const extents = padExtents(placed.map((p) => ({ from: p.from - height, to: p.to - height })));
-		const plan = planSlices(roomPx, extents, { pageHeight: lay.pageHeight, firstRoom: Math.max(96, lay.pageHeight - (height % lay.pageHeight)) });
-		if (plan.slices.length > 1) {
-			const firstSlice = plan.slices[0];
-			const w = Math.max(1, Math.round(elRect.width / sx));
-			// Clip main SVG strictly at end of slice 0 so continuation slices draw pages 2+ cleanly.
-			svg.classList.add("pl-reading-slice-svg");
-			svg.setAttribute("height", String(Math.max(1, Math.ceil(height + firstSlice.to))));
-			setGap(el, Math.ceil(firstSlice.to - firstSlice.from), true, height, sy);
-			for (let si = 1; si < plan.slices.length; si++) {
-				const slice = plan.slices[si];
-				const sliceH = Math.max(1, Math.ceil(slice.to - slice.from));
-				const div = el.createDiv({ cls: `${ROOM_CLASS} ${ROOM_SLICE_CLASS}`, attr: { "aria-hidden": "true" } });
-				div.style.height = `${sliceH}px`;
-				const sliceSvg = svgEl(doc, "svg");
-				sliceSvg.setAttribute("class", `${SVG_CLASS} pl-reading-slice-svg`);
-				sliceSvg.setAttribute("aria-hidden", "true");
-				sliceSvg.setAttribute("width", String(w));
-				sliceSvg.setAttribute("height", String(sliceH));
-				const sgHl = svgEl(doc, "g");
-				sgHl.setAttribute("class", "pl-hl");
-				const sgPen = svgEl(doc, "g");
-				sgPen.setAttribute("class", "pl-pen");
-				sliceSvg.append(sgHl, sgPen);
-				for (const item of placed) {
-					const localBand = { from: item.from - height, to: item.to - height };
-					if (!inSlice(localBand, slice)) continue;
-					const p = svgEl(doc, "path");
-					p.setAttribute("d", item.d);
-					const ty = item.y - height - slice.from;
-					const r2 = (v: number) => Math.round(v * 100) / 100;
-					if (ty !== 0 || item.x !== 0) p.setAttribute("transform", `translate(${r2(item.x)} ${r2(ty)})`);
-					paintPath(p, item.s, target);
-					(item.s.tool === "highlighter" ? sgHl : sgPen).appendChild(p);
+	if (lay.print && atEnd && lay.pageHeight && roomPx > 0) {
+		const sectionTop = lay.printTop !== undefined ? Math.max(0, (top - lay.printTop) / sy) : 0;
+		const firstRoom = new Pager(lay.pageHeight).room(sectionTop + height);
+		if (roomPx > firstRoom) {
+			const extents = padExtents(placed.map((p) => ({ from: p.from - height, to: p.to - height })));
+			const plan = planSlices(roomPx, extents, { pageHeight: lay.pageHeight, firstRoom });
+			if (plan.slices.length > 1 || plan.breakFirst) {
+				const w = Math.max(1, Math.round(elRect.width / sx));
+				// Clip main SVG strictly at end of page 1 content (or slice 0) so continuation slices draw pages 2+ cleanly.
+				svg.classList.add("pl-reading-slice-svg");
+				if (plan.breakFirst) {
+					svg.setAttribute("height", String(Math.max(1, Math.ceil(height))));
+					setGap(el, 0, true, height, sy);
+				} else {
+					const firstSlice = plan.slices[0];
+					svg.setAttribute("height", String(Math.max(1, Math.ceil(height + firstSlice.to))));
+					setGap(el, Math.ceil(firstSlice.to - firstSlice.from), true, height, sy);
 				}
-				div.appendChild(sliceSvg);
+				const startSlice = plan.breakFirst ? 0 : 1;
+				for (let si = startSlice; si < plan.slices.length; si++) {
+					const slice = plan.slices[si];
+					const sliceH = Math.max(1, Math.ceil(slice.to - slice.from));
+					const div = el.createDiv({ cls: `${ROOM_CLASS} ${ROOM_SLICE_CLASS}`, attr: { "aria-hidden": "true" } });
+					div.style.height = `${sliceH}px`;
+					const sliceSvg = createReadingSvg(doc, `${SVG_CLASS} pl-reading-slice-svg`, w, sliceH, multiply, true);
+					const sgHl = svgEl(doc, "g");
+					sgHl.setAttribute("class", "pl-hl");
+					const sgPen = svgEl(doc, "g");
+					sgPen.setAttribute("class", "pl-pen");
+					sliceSvg.append(sgHl, sgPen);
+					for (const item of placed) {
+						const localBand = { from: item.from - height, to: item.to - height };
+						if (!inSlice(localBand, slice)) continue;
+						const p = svgEl(doc, "path");
+						p.setAttribute("d", item.d);
+						const ty = item.y - height - slice.from;
+						const r2 = (v: number) => Math.round(v * 100) / 100;
+						if (ty !== 0 || item.x !== 0) p.setAttribute("transform", `translate(${r2(item.x)} ${r2(ty)})`);
+						paintPath(p, item.s, target);
+						(item.s.tool === "highlighter" ? sgHl : sgPen).appendChild(p);
+					}
+					div.appendChild(sliceSvg);
+				}
+				return drawn;
 			}
-			return drawn;
 		}
 	}
 	setGap(el, roomPx, atEnd, height, sy);
@@ -973,27 +989,28 @@ export class ReadingInk {
 		return { blocks, hosts };
 	}
 
-	private drawHosts(container: HTMLElement, lines: readonly string[], hosts: Host[], ink: InkFile, yScale: number, pageHeight: number): void {
+	private drawHosts(container: HTMLElement, lines: readonly string[], hosts: Host[], ink: InkFile, yScale: number, pageHeight: number, printTop: number): void {
 		if (isEmptyInk(ink)) return;
 		const drawnIds = new Set<string>();
 		if (hosts.length === 0) {
 			// No metadata: the whole note as one block (proportional placement).
-			drawSection(container, { lines, lineStart: 0, lineEnd: lines.length - 1, range: { from: 0, to: lines.length - 1 }, print: true, yScale, pageHeight, drawnIds }, ink);
+			drawSection(container, { lines, lineStart: 0, lineEnd: lines.length - 1, range: { from: 0, to: lines.length - 1 }, print: true, yScale, pageHeight, printTop, drawnIds }, ink);
 			return;
 		}
 		hosts.forEach((h, i) => {
 			const nextStart = i + 1 < hosts.length ? hosts[i + 1].lineStart : lines.length;
 			const range = ownedRange(lines, h.lineStart, h.lineEnd, { nextStart, isFirst: i === 0 });
-			drawSection(h.el, { lines, lineStart: h.lineStart, lineEnd: h.lineEnd, range, print: true, yScale, pageHeight, drawnIds }, ink);
+			drawSection(h.el, { lines, lineStart: h.lineStart, lineEnd: h.lineEnd, range, print: true, yScale, pageHeight, printTop, drawnIds }, ink);
 		});
 	}
 
-	private layoutPrint(container: HTMLElement, file: TFile, text: string, ink: InkFile, cfg: unknown, _page: HTMLElement | null, style: ExportStyle): void {
+	private layoutPrint(container: HTMLElement, file: TFile, text: string, ink: InkFile, cfg: unknown, page: HTMLElement | null, style: ExportStyle): void {
 		const lines = splitLines(text);
 		const { hosts } = this.printBlocks(container, file);
 		// Document style: its body text has its own line height; ink was drawn against the editor's.
 		const yScale = style === "document" ? inkYScale(lineHeightOf(container), this.editorLineHeight(file.path)) : 1;
 		const pageHeight = Math.floor(printAreaHeight(cfg) - PRINT_PAGE_CLEARANCE);
-		this.drawHosts(container, lines, hosts, ink, yScale, pageHeight);
+		const printTop = (page ?? container).getBoundingClientRect().top;
+		this.drawHosts(container, lines, hosts, ink, yScale, pageHeight, printTop);
 	}
 }

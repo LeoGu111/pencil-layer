@@ -726,6 +726,12 @@ export class InkView implements PluginValue {
 		this.extraPages = 2;
 		this.lastBottomPad = -1;
 		this.pageGuideKey = "";
+		this.pinch = null;
+		if (this.zoom !== 1 || this.zoomBaseSizerWidth !== null || this.zoomSpacer || this.zoomBadge) {
+			this.resetZoomDom();
+			this.updateZoomSpacer();
+			this.updateZoomBadge();
+		}
 		const token = ++this.attachToken;
 		if (!path || path === this.deadPath) {
 			this.path = null;
@@ -1394,7 +1400,10 @@ export class InkView implements PluginValue {
 	private renderPageGuides(geo: Geometry): void {
 		const fmt = this.host.getSettings().pageGuide;
 		const sd = this.view.scrollDOM;
-		const visW = Math.round(sd.clientWidth || geo.width);
+		const sRect = typeof sd.getBoundingClientRect === "function" ? sd.getBoundingClientRect() : null;
+		const sdScaleX = sd.offsetWidth > 0 && sRect && sRect.width > 0 ? sRect.width / sd.offsetWidth : 1;
+		const sx = this.effectiveScaleX() || 1;
+		const visW = Math.round(sd.clientWidth > 0 ? (sd.clientWidth * sdScaleX) / sx : geo.width);
 		const leftMargin = Math.max(0, Math.round(geo.left));
 		const key = `${fmt}:${Math.round(geo.width)}x${Math.round(geo.height)}:${visW}:${leftMargin}`;
 		if (key === this.pageGuideKey) return;
