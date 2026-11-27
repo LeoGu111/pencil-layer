@@ -93,3 +93,54 @@ export function wheelZoomFactor(deltaY: number): number {
 export function formatZoomPercent(zoom: number): string {
 	return `${Math.round(clampZoom(zoom) * 100)}%`;
 }
+
+export interface ZoomSizerMarginOptions {
+	containerWidth: number;
+	paddingLeft: number;
+	paddingRight: number;
+	baseWidth: number;
+	zoom: number;
+	centered: boolean;
+}
+
+/**
+ * Compute horizontal `margin-left` (unzoomed CSS px) for a zoomed `.cm-sizer` inside `.cm-scroller`.
+ * Keeps the sizer centered while its scaled width fits inside the scroller's inner width, and
+ * collapses the auto-margin to `0` once zoomed wider so the content's left edge stays reachable
+ * at `scrollLeft = 0` (`>= scroller.left`).
+ */
+export function zoomedSizerMarginLeft(opts: ZoomSizerMarginOptions): number {
+	const { containerWidth, paddingLeft, paddingRight, baseWidth, zoom, centered } = opts;
+	if (!centered || ![containerWidth, paddingLeft, paddingRight, baseWidth, zoom].every(Number.isFinite)) return 0;
+	if (containerWidth <= 0 || baseWidth <= 0 || zoom <= 0) return 0;
+	const innerWidth = Math.max(0, containerWidth - paddingLeft - paddingRight);
+	const scaledWidth = baseWidth * zoom;
+	if (scaledWidth >= innerWidth) return 0;
+	return (innerWidth - scaledWidth) / 2;
+}
+
+export interface ZoomSpacerSizeOptions {
+	offsetLeft: number;
+	offsetTop: number;
+	targetWidth: number;
+	targetHeight: number;
+	geoRight: number;
+	geoBottom: number;
+	paddingRight: number;
+	rightExtra: number;
+	bottomExtra: number;
+	zoom: number;
+}
+
+/** Compute `.pl-zoom-spacer` dimensions so the entire zoomed page + ink canvas is horizontally & vertically scrollable. */
+export function zoomSpacerSize(opts: ZoomSpacerSizeOptions): { width: number; height: number } {
+	const z = Number.isFinite(opts.zoom) && opts.zoom > 0 ? opts.zoom : 1;
+	const left = Math.max(0, Number.isFinite(opts.offsetLeft) ? opts.offsetLeft : 0);
+	const top = Math.max(0, Number.isFinite(opts.offsetTop) ? opts.offsetTop : 0);
+	const contentW = Math.max(opts.targetWidth || 0, (opts.geoRight || 0) + (opts.rightExtra || 0));
+	const contentH = Math.max(opts.targetHeight || 0, (opts.geoBottom || 0) + (opts.bottomExtra || 0));
+	return {
+		width: Math.ceil(left + contentW * z + Math.max(0, opts.paddingRight || 0)),
+		height: Math.ceil(top + contentH * z),
+	};
+}

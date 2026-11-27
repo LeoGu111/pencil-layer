@@ -88,10 +88,15 @@
 }
 
 .pl-zoom-target {
-	transform-origin: 0 0;
+	transform-origin: 0 0 !important;
+	align-self: flex-start !important;
 	box-sizing: border-box !important;
 	flex-grow: 0 !important;
 	flex-shrink: 0 !important;
+}
+
+.cm-sizer.pl-zoom-target {
+	margin-right: 0 !important;
 }
 
 .ink-pages-overlay {

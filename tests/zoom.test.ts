@@ -10,6 +10,8 @@ import {
 	pinchScale,
 	scrollForZoomAnchor,
 	wheelZoomFactor,
+	zoomSpacerSize,
+	zoomedSizerMarginLeft,
 } from "../src/zoom";
 
 describe("zoom helpers", () => {
@@ -50,5 +52,58 @@ describe("zoom helpers", () => {
 		expect(wheelZoomFactor(-50)).toBeGreaterThan(1);
 		expect(wheelZoomFactor(50)).toBeLessThan(1);
 		expect(formatZoomPercent(1.246)).toBe("125%");
+	});
+
+	it("keeps centered sizer centered when it fits and collapses left margin to 0 when wider", () => {
+		// 924px scroller with 32px left/right padding -> 860px inner width; 700px sizer.
+		expect(
+			zoomedSizerMarginLeft({
+				containerWidth: 924,
+				paddingLeft: 32,
+				paddingRight: 32,
+				baseWidth: 700,
+				zoom: 1.15,
+				centered: true,
+			}),
+		).toBeCloseTo(27.5, 5);
+		// At 152% (1064px > 860px), auto-margin collapses to 0 so left edge is reachable at scrollLeft=0.
+		expect(
+			zoomedSizerMarginLeft({
+				containerWidth: 924,
+				paddingLeft: 32,
+				paddingRight: 32,
+				baseWidth: 700,
+				zoom: 1.52,
+				centered: true,
+			}),
+		).toBe(0);
+		// Non-centered theme keeps 0 margin even when zoomed out.
+		expect(
+			zoomedSizerMarginLeft({
+				containerWidth: 924,
+				paddingLeft: 32,
+				paddingRight: 32,
+				baseWidth: 700,
+				zoom: 0.5,
+				centered: false,
+			}),
+		).toBe(0);
+	});
+
+	it("computes zoom spacer dimensions covering the full zoomed page width", () => {
+		const spacer = zoomSpacerSize({
+			offsetLeft: 32,
+			offsetTop: 0,
+			targetWidth: 700,
+			targetHeight: 1000,
+			geoRight: 700,
+			geoBottom: 1000,
+			paddingRight: 32,
+			rightExtra: 48,
+			bottomExtra: 120,
+			zoom: 1.52,
+		});
+		expect(spacer.width).toBeGreaterThanOrEqual(Math.ceil(32 + 748 * 1.52 + 32));
+		expect(spacer.height).toBe(Math.ceil(1120 * 1.52));
 	});
 });

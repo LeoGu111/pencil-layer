@@ -468,4 +468,173 @@ describe("free drawing without Ink spaces", () => {
 		expect(created.points[0][0]).toBeCloseTo(30, 5);
 		expect(created.points[0][1]).toBeCloseTo(5, 5);
 	});
+
+	it("keeps .cm-sizer left edge >= .cm-scroller left when zooming in 3 steps to ~152% (issue #11)", () => {
+		const doc = EditorState.create({ doc: "Zeile 1: Dies ist ein längerer Absatz\nZeile 2: Noch eine Zeile" }).doc;
+		const createdDivs: TestElement[] = [];
+		const scrollerLeft = 344;
+		const scrollerClientW = 924;
+		const padL = 32;
+		const padR = 32;
+		const baseSizerW = 700;
+
+		let sizerCss: Record<string, string> = {};
+		const sizer = Object.assign(new TestElement(), {
+			classList: {
+				add: vi.fn(),
+				remove: vi.fn(),
+				toggle: vi.fn(),
+				contains: (c: string) => c === "cm-sizer",
+			},
+			offsetWidth: baseSizerW,
+			offsetHeight: 800,
+			offsetTop: 0,
+			setCssProps: vi.fn((props: Record<string, string>) => {
+				sizerCss = { ...sizerCss, ...props };
+			}),
+		});
+
+		const scrollDOM = Object.assign(new TestElement(), {
+			scrollLeft: 0,
+			scrollTop: 0,
+			clientWidth: scrollerClientW,
+			clientHeight: 800,
+			offsetWidth: 936,
+			offsetHeight: 800,
+			setPointerCapture: vi.fn(),
+			hasPointerCapture: vi.fn(() => true),
+			releasePointerCapture: vi.fn(),
+			getBoundingClientRect: () => ({ left: scrollerLeft, top: 0, width: 936, height: 800, bottom: 800 }),
+			createDiv: vi.fn(() => {
+				const div = Object.assign(new TestElement(), { isConnected: true });
+				createdDivs.push(div);
+				return div;
+			}),
+		});
+
+		const currentZoom = () => {
+			const m = /scale\(([^)]+)\)/.exec(sizerCss.transform ?? "");
+			return m ? Number(m[1]) : 1;
+		};
+		const sizerOffsetLeft = () => {
+			if (sizerCss.marginLeft !== undefined && sizerCss.marginLeft !== "") {
+				return padL + parseFloat(sizerCss.marginLeft);
+			}
+			return (scrollerClientW - baseSizerW) / 2; // 112px at 100%
+		};
+		Object.defineProperty(sizer, "offsetLeft", {
+			get: () => sizerOffsetLeft(),
+		});
+		Object.defineProperty(sizer, "getBoundingClientRect", {
+			value: () => {
+				const z = currentZoom();
+				const left = scrollerLeft + sizerOffsetLeft() - scrollDOM.scrollLeft;
+				return { left, top: -scrollDOM.scrollTop, width: baseSizerW * z, height: 800 * z, bottom: 800 * z - scrollDOM.scrollTop };
+			},
+		});
+
+		const contentDOM = Object.assign(new TestElement(), {
+			parentElement: sizer,
+			clientWidth: baseSizerW,
+			offsetWidth: baseSizerW,
+			offsetHeight: 800,
+			contains: () => false,
+			getBoundingClientRect: () => sizer.getBoundingClientRect(),
+		});
+
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+		vi.stubGlobal("window", { setTimeout, clearTimeout, requestAnimationFrame: vi.fn(() => 1), cancelAnimationFrame: vi.fn() });
+		vi.stubGlobal("getComputedStyle", (el: unknown) => {
+			if (el === scrollDOM) return { paddingLeft: String(padL), paddingRight: String(padR), paddingTop: "0" };
+			return { paddingLeft: "0", paddingRight: "0", paddingTop: "0", borderLeftWidth: "0", borderTopWidth: "0", borderRightWidth: "0" };
+		});
+		vi.stubGlobal("activeDocument", {
+			createElementNS: () => new TestElement(),
+		});
+
+		const view = {
+			scrollDOM,
+			contentDOM,
+			state: {
+				doc,
+				selection: EditorState.create({ doc: doc.toString() }).selection,
+				field: (field: unknown) => (field === undefined ? { file: { extension: "md", path: "Lang-Notiz.md" } } : undefined),
+			},
+			scaleX: 1,
+			scaleY: 1,
+			documentTop: 0,
+			contentHeight: 800,
+			defaultLineHeight: 24,
+			viewport: { from: 0, to: doc.length },
+			lineBlockAt: () => ({ from: 0, top: 0, bottom: 24 }),
+			lineBlockAtHeight: () => ({ from: 0, top: 0, bottom: 24 }),
+			requestMeasure: vi.fn(),
+		};
+		const host = {
+			store: {
+				subscribe: vi.fn(),
+				load: () => new Promise(() => {}),
+				isLoaded: () => true,
+				get: emptyInk,
+				allStrokes: () => [],
+				setContentWidth: vi.fn(),
+			},
+			getSettings: () => ({ ...DEFAULT_SYNCED, ...defaultLocal(true), pageGuide: "A4" as const, tool: "pen" as const }),
+			registerInkView: vi.fn(),
+			penSeen: vi.fn(),
+			deskSelect: () => null,
+			selectionToolActive: () => false,
+		};
+
+		const ink = new InkView(view as unknown as EditorView, host as unknown as InkHost);
+		// Step 1 (115%): still fits inside inner width (805 <= 860), centered without horizontal scroll.
+		ink.zoomIn();
+		expect(scrollDOM.scrollLeft).toBe(0);
+		expect(sizer.getBoundingClientRect().left).toBeGreaterThanOrEqual(scrollerLeft);
+
+		// Steps 2 & 3 (~132% and ~152%): wider than viewport, margin collapses to 0 and left edge stays >= scroller.left.
+		ink.zoomIn();
+		ink.zoomIn();
+		expect(ink.getZoom()).toBeCloseTo(1.52, 3);
+		expect(scrollDOM.scrollLeft).toBe(0);
+		const rect152 = sizer.getBoundingClientRect() as { left: number; top: number; width: number; height: number; bottom: number };
+		expect(rect152.left).toBe(scrollerLeft + padL);
+		expect(rect152.left).toBeGreaterThanOrEqual(scrollerLeft);
+		expect(rect152.width).toBeCloseTo(baseSizerW * 1.52, 1);
+		expect(sizer.classList.toggle).toHaveBeenCalledWith("pl-zoom-target", true);
+		expect(sizerCss.marginLeft).toBe("0px");
+
+		// Spacer allows scrolling across the entire zoomed width (including right print margin).
+		const spacer = createdDivs[0];
+		expect(parseFloat(spacer.style.width)).toBeGreaterThanOrEqual(Math.ceil(padL + baseSizerW * 1.52 + padR));
+
+		// When the user has panned horizontally right, zoomIn/zoomOut anchors the left edge cleanly.
+		scrollDOM.scrollLeft = 150;
+		ink.zoomIn();
+		expect(scrollDOM.scrollLeft).toBeGreaterThan(150);
+		ink.zoomOut();
+		expect(scrollDOM.scrollLeft).toBeCloseTo(150, 1);
+
+		// Ctrl+Wheel zooming around viewport center keeps marginLeft=0 so scrolling back to scrollLeft=0 reaches the left edge.
+		ink.resetZoom();
+		scrollDOM.dispatchEvent(
+			Object.assign(new Event("wheel", { cancelable: true }), {
+				ctrlKey: true,
+				deltaY: -120,
+				clientX: scrollerLeft + scrollerClientW / 2,
+				clientY: 400,
+			}),
+		);
+		expect(ink.getZoom()).toBeGreaterThan(1);
+		scrollDOM.scrollLeft = 0;
+		expect(sizer.getBoundingClientRect().left).toBeGreaterThanOrEqual(scrollerLeft);
+
+		// Resetting to 100% clears zoom styles and restores scrollLeft=0.
+		ink.resetZoom();
+		expect(ink.getZoom()).toBe(1);
+		expect(scrollDOM.scrollLeft).toBe(0);
+		expect(sizerCss.marginLeft).toBe("");
+		expect(sizer.classList.toggle).toHaveBeenLastCalledWith("pl-zoom-target", false);
+		expect(spacer.remove).toHaveBeenCalledOnce();
+	});
 });
