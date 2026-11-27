@@ -499,8 +499,6 @@ export class InkView implements PluginValue {
 	private hoverAt: XY | null = null;
 	private hoverRaf = 0;
 	private hoverCursor = "";
-	/** [Stage K] Stub space-controls object; replaced by a real SpaceUi when that class lands. */
-	private readonly spaceUi = { isControl: (_target: EventTarget | null): boolean => false };
 
 	constructor(
 		readonly view: EditorView,

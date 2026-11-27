@@ -18,10 +18,7 @@
  * "Include ink in PDF export" is off on this device. The DOM may live in another window: always
  * use `el.ownerDocument` / `el.win`, never the globals.
  *
- * Stage K: drawing spaces are in-flow blocks of exactly their height (`.pl-reading-space`) with
- * their ink, placed where the editor shows them (after the block holding their line; see
- * spaces.ts). In print they don't break inside unless taller than a page. They print with or
- * without ink (the layout must not change).
+ * Legacy `.pl-reading-space` blocks (if present from older renders) are stripped on re-render.
  */
 import { App, MarkdownPostProcessorContext, MarkdownRenderChild, MarkdownView, Plugin, TFile } from "obsidian";
 import { dashArray, isCenterline, strokeToPath, bbox } from "./geometry";
@@ -457,8 +454,8 @@ function setGap(el: HTMLElement, px: number, room = false, contentHeight?: numbe
 }
 
 /**
- * Draw the ink owned by one section into it (replacing any previous drawing), with [Stage K] the
- * drawing spaces shown after its lines. Returns the number of strokes drawn.
+ * Draw the ink owned by one section into it (replacing any previous drawing). Returns the number of
+ * strokes drawn.
  */
 function drawSection(el: HTMLElement, lay: Layout, ink: InkFile): number {
 	const doc = el.ownerDocument;
@@ -839,9 +836,8 @@ export class ReadingInk {
 			return;
 		}
 		if (!el.isConnected) return; // virtualized away; the ResizeObserver fires on re-attach
-		// [Stage K] Not rendered (the leaf is in editing mode / hidden): measurements would be
-		// garbage and a space block placed from them would stay wrong. The ResizeObserver fires
-		// again when it is shown (its size goes from 0 to its real size).
+		// Not rendered (the leaf is in editing mode / hidden): measurements would be stale. The
+		// ResizeObserver fires again when it is shown (its size goes from 0 to its real size).
 		if (el.getClientRects().length === 0) return;
 		const ink = this.host.store.get(sec.path);
 		if (!ink || isEmptyInk(ink)) {
@@ -851,7 +847,6 @@ export class ReadingInk {
 		const lines = splitLines(info.text);
 		const range = ownedRange(lines, info.lineStart, info.lineEnd, nextStart !== undefined ? { nextStart } : {});
 		try {
-			// [Stage K] "Show ink" off: spaces still take their room (the layout never changes).
 			const shown = this.host.getSettings().inkVisible ? ink : { ...ink, strokes: [] };
 			drawSection(el, { lines, lineStart: info.lineStart, lineEnd: info.lineEnd, range, print: false, drawnIds }, shown);
 		} catch (err) {
