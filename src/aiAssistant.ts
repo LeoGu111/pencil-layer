@@ -85,6 +85,52 @@ export function base64ToPngBlob(base64Png: string): Blob {
 	return new Blob([bytes], { type: "image/png" });
 }
 
+/** Result of copying web-handoff content to the system clipboard. */
+export type HandoffCopyResult = "both" | "text" | "image" | "none";
+
+/**
+ * Copy prompt text (and optional handwritten PNG image) to the system clipboard for Gemini web handoff.
+ * Never throws; falls back to text-only or image-only if combined `ClipboardItem` writing fails.
+ */
+export async function copyWebHandoffToClipboard(text: string, imageBase64Png?: string): Promise<HandoffCopyResult> {
+	const trimmedText = text.trim();
+	if (imageBase64Png) {
+		if (typeof ClipboardItem !== "undefined" && typeof navigator.clipboard?.write === "function") {
+			try {
+				const itemData: Record<string, Blob> = {
+					"image/png": base64ToPngBlob(imageBase64Png),
+				};
+				if (trimmedText) {
+					itemData["text/plain"] = new Blob([trimmedText], { type: "text/plain" });
+				}
+				await navigator.clipboard.write([new ClipboardItem(itemData)]);
+				return trimmedText ? "both" : "image";
+			} catch (err) {
+				console.warn("[ink-pages] copying text + image to clipboard failed, falling back", err);
+			}
+		}
+		if (trimmedText && typeof navigator.clipboard?.writeText === "function") {
+			try {
+				await navigator.clipboard.writeText(trimmedText);
+				return "text";
+			} catch {
+				/* fall through to image-only fallback */
+			}
+		}
+		const copiedImg = await copyPngToClipboard(Promise.resolve(base64ToPngBlob(imageBase64Png)));
+		return copiedImg ? "image" : "none";
+	}
+	if (trimmedText && typeof navigator.clipboard?.writeText === "function") {
+		try {
+			await navigator.clipboard.writeText(trimmedText);
+			return "text";
+		} catch {
+			return "none";
+		}
+	}
+	return "none";
+}
+
 /** Copy a handwritten PNG image to the system clipboard and open Gemini (Google AI Pro). */
 export async function handoffImageToGeminiAccount(base64Png: string, openSidebar?: () => Promise<void>): Promise<void> {
 	try {
@@ -197,10 +243,12 @@ export class GeminiAssistantModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.empty();
+		this.sendBtn = null;
 		this.modalEl.addClass("pl-ai-modal");
 		this.titleEl.setText("Gemini (Google AI Pro)");
 
 		const hasKey = this.host.getApiKey().trim().length > 0;
+		const hasImage = Boolean(this.opts.imageBase64Png);
 
 		// Account-first hero card (zero API key needed!)
 		const accountCard = contentEl.createDiv({ cls: "pl-ai-account-card" });
@@ -226,8 +274,14 @@ export class GeminiAssistantModal extends Modal {
 			});
 		}
 		const textProBtn = accountActions.createEl("button", {
-			cls: this.opts.imageBase64Png ? "" : "mod-cta",
-			text: Platform.isDesktopApp ? "Frage kopieren & Gemini-Seitenleiste öffnen" : "Frage + Kontext kopieren & Gemini öffnen ↗",
+			cls: hasImage ? "" : "mod-cta",
+			text: hasImage
+				? Platform.isDesktopApp
+					? "Frage & Bild kopieren & Gemini-Seitenleiste öffnen"
+					: "Frage, Kontext & Bild kopieren & Gemini öffnen ↗"
+				: Platform.isDesktopApp
+					? "Frage kopieren & Gemini-Seitenleiste öffnen"
+					: "Frage + Kontext kopieren & Gemini öffnen ↗",
 		});
 		textProBtn.addEventListener("click", () => void this.openInGoogleAiPro());
 
@@ -285,18 +339,28 @@ export class GeminiAssistantModal extends Modal {
 				else void this.openInGoogleAiPro();
 			}
 		});
-		if (hasKey) {
-			this.sendBtn = composer.createEl("button", { cls: "mod-cta pl-ai-send", text: "Direkt senden" });
-			this.sendBtn.addEventListener("click", () => void this.send());
-		}
+		const ensureSendButton = (activeKey: boolean): void => {
+			if (activeKey && !this.sendBtn) {
+				this.sendBtn = composer.createEl("button", { cls: "mod-cta pl-ai-send", text: "Direkt senden" });
+				this.sendBtn.disabled = this.busy;
+				this.sendBtn.addEventListener("click", () => void this.send());
+			} else if (!activeKey && this.sendBtn) {
+				this.sendBtn.remove();
+				this.sendBtn = null;
+			}
+		};
+		ensureSendButton(hasKey);
 
 		// Chat thread (used when optional API key is active)
 		this.threadEl = contentEl.createDiv({ cls: "pl-ai-thread" });
+		for (const msg of this.history) {
+			this.appendMessage(msg);
+		}
 		this.statusEl = contentEl.createDiv({ cls: "pl-ai-status pl-hidden" });
 
 		// Collapsible optional API section (tucked away, never nags!)
 		const adv = contentEl.createEl("details", { cls: "pl-ai-advanced" });
-		adv.createEl("summary", {
+		const advSummary = adv.createEl("summary", {
 			text: hasKey ? "Direkt-Modus aktiv (API-Key / Modell ändern)" : "Optional: Direktantwort in Obsidian ohne App-Wechsel (API-Key)",
 		});
 		const advBody = adv.createDiv({ cls: "pl-ai-advanced-body" });
@@ -319,7 +383,11 @@ export class GeminiAssistantModal extends Modal {
 		saveKeyBtn.addEventListener("click", () => {
 			this.host.setApiKey(keyInput.value.trim());
 			new Notice("Gespeichert.");
-			this.onOpen();
+			const activeKey = this.host.getApiKey().trim().length > 0;
+			advSummary.setText(
+				activeKey ? "Direkt-Modus aktiv (API-Key / Modell ändern)" : "Optional: Direktantwort in Obsidian ohne App-Wechsel (API-Key)",
+			);
+			ensureSendButton(activeKey);
 		});
 		const getKeyLink = row.createEl("a", {
 			text: "Kostenloser Key ↗",
@@ -337,13 +405,20 @@ export class GeminiAssistantModal extends Modal {
 	private async openInGoogleAiPro(): Promise<void> {
 		const q = this.inputEl?.value.trim() || "Hilf mir bei dieser Notiz:";
 		const payload = buildWebHandoffPrompt(q, this.opts.noteTitle, this.includeNoteContext ? this.opts.noteContext : undefined);
-		try {
-			if (payload && navigator.clipboard?.writeText) {
-				await navigator.clipboard.writeText(payload);
-				new Notice("Frage & Notiz-Kontext kopiert — einfach in Gemini (Google-Konto) einfügen!", 3800);
-			}
-		} catch {
-			/* ignore */
+		const result = await copyWebHandoffToClipboard(payload, this.opts.imageBase64Png);
+		if (result === "both") {
+			new Notice("Frage, Kontext & Handschrift-Bild kopiert — einfach in Gemini (Google-Konto) einfügen!", 4000);
+		} else if (result === "text") {
+			new Notice(
+				this.opts.imageBase64Png
+					? "Frage & Notiz-Kontext kopiert (Bild bitte ggf. separat über „Bild kopieren“ einfügen)."
+					: "Frage & Notiz-Kontext kopiert — einfach in Gemini (Google-Konto) einfügen!",
+				3800,
+			);
+		} else if (result === "image") {
+			new Notice("Handschrift als Bild kopiert — einfach in Gemini (Google-Konto) einfügen!", 4000);
+		} else {
+			new Notice("Gemini wird geöffnet…", 2500);
 		}
 		if (Platform.isDesktopApp && this.host.openSidebar) {
 			await this.host.openSidebar();
