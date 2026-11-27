@@ -55,6 +55,23 @@ export const TAP_MAX_EXTRA_COLS = 80;
  */
 const NBSP = "\u00A0";
 
+export interface TapPaddingRange {
+	from: number;
+	to: number;
+	anchor: number;
+}
+
+const PURE_PADDING_RE = /^[\n\u00A0]+$/;
+
+/** True when `slice` is solely tap-to-type padding (`\n` / NBSP) and nothing was typed after it on the line. */
+export function isUnusedTapPadding(slice: string, restOfLine = ""): boolean {
+	return slice.length > 0 && PURE_PADDING_RE.test(slice) && restOfLine.length === 0;
+}
+
+export function isPureTapPadding(slice: string): boolean {
+	return slice.length > 0 && PURE_PADDING_RE.test(slice);
+}
+
 export function planTapToType(input: TapToTypeInput): TapToTypePlan | null {
 	const lineH = input.lineHeight > 0 ? input.lineHeight : 24;
 	const charW = input.charWidth > 0 ? input.charWidth : 8.5;

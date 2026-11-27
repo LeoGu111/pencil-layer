@@ -18,6 +18,7 @@
  */
 import type { EditorView } from "@codemirror/view";
 import type { Text } from "@codemirror/state";
+import { computedStyleOf } from "./dom";
 import { Point, Stroke, newId, resolveAnchor } from "./model";
 import type { BBox } from "./geometry";
 import {
@@ -60,7 +61,7 @@ export function elementBoxScale(
 	fallbackY = 1,
 	cs?: CSSStyleDeclaration,
 ): { sx: number; sy: number } {
-	const style = cs ?? getComputedStyle(el);
+	const style = cs ?? computedStyleOf(el);
 	const rawW = parseFloat(style.width);
 	const rawH = parseFloat(style.height);
 	const borderBox = style.boxSizing === "border-box";
@@ -92,7 +93,7 @@ export function elementBoxScale(
 /** Client position of the overlay origin (same as InkView.readGeometry: content left + padding, documentTop). */
 export function overlayOrigin(view: EditorView): Origin {
 	const cd = view.contentDOM;
-	const cs = getComputedStyle(cd);
+	const cs = computedStyleOf(cd);
 	const padL = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.borderLeftWidth) || 0);
 	const padT = parseInt(cs.paddingTop) || 0;
 	const borderT = parseFloat(cs.borderTopWidth) || 0;

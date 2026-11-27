@@ -406,6 +406,14 @@ describe("Apple Pencil feel, tilt & gestures settings", () => {
 		expect(Object.keys(splitPatch({ mathApiKey: "k", mathMode: true, pageGuide: "A3" }).synced)).toEqual([]);
 	});
 
+	it("supports per-device tapToType opt-out toggle (defaults true)", () => {
+		expect(defaultLocal(true).tapToType).toBe(true);
+		expect(defaultLocal(false).tapToType).toBe(true);
+		expect(sanitizeLocal({ tapToType: false }, false).tapToType).toBe(false);
+		expect(sanitizeLocal({ tapToType: "no" }, true).tapToType).toBe(true);
+		expect(Object.keys(splitPatch({ tapToType: false }).local)).toEqual(["tapToType"]);
+	});
+
 	it("uses current Gemini 4 models by default and migrates legacy Gemini 2.5 selections", () => {
 		expect(defaultLocal(true).geminiModel).toBe("gemini-4-hydrogen");
 		expect(sanitizeLocal({ geminiModel: "gemini-2.5-flash" }, true).geminiModel).toBe("gemini-4-hydrogen");
